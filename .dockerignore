@@ -1,0 +1,38 @@
+# Keep the build context small and secrets out of the image.
+.git
+.gitignore
+.github
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Data / artifacts
+data/
+*.duckdb
+*.parquet
+*.db
+
+# Python caches
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Plans / local docs not needed in the image
+.claude/

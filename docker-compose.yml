@@ -1,0 +1,12 @@
+services:
+  asr:
+    build:
+      context: .
+      target: dev        # editable install + dev tools; prod uses --target runtime
+    env_file: .env
+    volumes:
+      - ./:/app          # live code mount for dev
+      - ./data:/app/data # persist DuckDB
+    working_dir: /app
+    # keep container alive so you can `docker compose exec asr asr info`
+    command: sleep infinity

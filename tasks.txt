@@ -16,7 +16,7 @@ Phase 0 — Scope & decisions (unblocks everything)
 
 Phase 1 — Scaffolding & environment
 
-[CLAUDE] Monorepo layout (ingest/, features/, news/, agents/, backtest/, app/, infra/), dependency setup (uv or Poetry), pre-commit, linting.
+[CLAUDE] Repo layout: a `src/asr/` Python package (src-layout — cleaner on GitHub and packages cleanly into a multi-stage Docker image) holding the functional areas ingest/, features/, news/, agents/, backtest/, storage/, app/ (Phase 7 UI); infra/ sits at the repo root (deploy manifests, Secret Manager, DAGs — Phases 8-9). Dependency setup (uv), pre-commit, ruff linting.
 [CLAUDE] .env.example + config module; local secrets via .env, prod via Secret Manager.
 [CLAUDE] Multi-stage Dockerfile (Python + Node.js, since any MCP piece needs Node) and a docker-compose.yml for Rancher/Docker on CachyOS.
 [PRASAD] docker compose up to confirm the shell container builds and runs on your machine.
