@@ -1,0 +1,73 @@
+Let's build it. Here's the full plan for a grounded, research-only agentic stock research system for Indian markets — the architecture we landed on: deterministic data and math on the outside, Claude only for reasoning and synthesis inside, GCP-flavored, containerized on your CachyOS box.
+I've tagged every step with an owner so we can split cleanly:
+
+[YOU] — needs a human: accounts, credentials, money, decisions, running commands on your machine
+[ME] — I produce it: code, Dockerfiles, schemas, configs, docs
+[BOTH] — I write it, you run/verify it
+
+
+Phase 0 — Scope & decisions (unblocks everything)
+
+[YOU] Confirm research-only boundary (no automated order placement). This keeps you entirely outside SEBI's Algo-ID mandate. Everything below assumes this.
+[YOU] Pick the data/broker source — this is the one choice that shapes the most code (auth flow differs per broker).
+[YOU] Pick the stock universe (e.g. Nifty 50, a custom watchlist, or broader).
+[YOU] Create a GCP project with billing enabled; get an Anthropic API key.
+[ME] Recommend a dev strategy that keeps cost near zero until it works (local DuckDB + Parquet first, lift to BigQuery later).
+
+Phase 1 — Scaffolding & environment
+
+[ME] Monorepo layout (ingest/, features/, news/, agents/, backtest/, app/, infra/), dependency setup (uv or Poetry), pre-commit, linting.
+[ME] .env.example + config module; local secrets via .env, prod via Secret Manager.
+[ME] Multi-stage Dockerfile (Python + Node.js, since any MCP piece needs Node) and a docker-compose.yml for Rancher/Docker on CachyOS.
+[YOU] docker compose up to confirm the shell container builds and runs on your machine.
+
+Phase 2 — Data ingestion (deterministic)
+
+[ME] Broker API client wrapper (auth + rate limiting + retries) for the source you picked.
+[ME] Ingestors: historical OHLCV backfill, daily incremental, fundamentals, corporate actions.
+[ME] Storage adapter that writes to DuckDB locally and BigQuery in prod behind the same interface.
+[YOU] Authorize the broker (e.g. Kite needs a daily token handshake), run the initial backfill, eyeball the data.
+
+Phase 3 — Feature / indicator layer (deterministic)
+
+[ME] Compute RSI, MACD, moving averages, ATR, Bollinger, volume features with pandas-ta — real math, never LLM-guessed (this was the repo's core flaw).
+[ME] Unit tests asserting indicator correctness against known values.
+[BOTH] Run the feature job, spot-check a few tickers.
+
+Phase 4 — News & sentiment (LLM, grounded)
+
+[YOU] Choose/authorize a legit news source (broker news feed, a news API, or curated RSS — not open-web scraping).
+[ME] Claude-based extractor that turns articles into structured JSON (sentiment, catalyst type, entities) against a Pydantic schema, with dedup and timestamps.
+
+Phase 5 — Agentic reasoning layer (Claude)
+
+[ME] LangGraph supervisor + constrained tool-calling agents (screener, technical-context, fundamental-context, news-context, synthesis).
+[ME] Tools query BigQuery/DuckDB with typed inputs — agents read grounded numbers, they don't invent them.
+[ME] ChatAnthropic wiring, structured Pydantic outputs, and guardrails: the model must cite the data rows behind any claim and refuse when data is missing rather than hallucinate a price target.
+
+Phase 6 — Backtest & eval harness (deterministic)
+
+[ME] vectorbt/backtrader harness over historical data so any rule-based signal has measured performance.
+[ME] A separate eval that checks the agents' reasoning uses grounded data correctly (not P&L — reasoning fidelity).
+
+Phase 7 — Delivery / UI
+
+[ME] A daily research brief generator (Markdown/PDF) and/or a Streamlit dashboard — read-only research output with disclaimers baked in.
+
+Phase 8 — Orchestration
+
+[ME] Pipeline DAG (ingest → features → news → research brief). Given your background, Cloud Composer/Airflow will feel native; I'll also give a lighter Cloud Scheduler → Pub/Sub → Cloud Run variant.
+[YOU] Deploy and schedule it.
+
+Phase 9 — Containerize & deploy
+
+[ME] Finalize images, push to Artifact Registry, deploy target (Cloud Run for the app, or GKE — and you can mirror it on local Rancher k8s if you want).
+[YOU] Run the deploy, wire up secrets in GCP.
+
+Phase 10 — Observability, cost control, hardening
+
+[ME] Structured logging, Claude API spend caps + token budgeting, data-quality checks (Great Expectations), retry/backoff, secret rotation.
+
+Phase 11 — Compliance checkpoint
+
+[BOTH] Document the research-only boundary, confirm no order-placement path exists, and put the "not investment advice" disclaimer in every output.
