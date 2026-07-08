@@ -9,10 +9,17 @@ I've tagged every step with an owner so we can split cleanly:
 Phase 0 — Scope & decisions (unblocks everything)
 
 [PRASAD] Confirm research-only boundary (no automated order placement). This keeps you entirely outside SEBI's Algo-ID mandate. Everything below assumes this.
+    -> CONFIRMED. Research-only; no order-placement path anywhere in the system.
 [PRASAD] Pick the data/broker source — this is the one choice that shapes the most code (auth flow differs per broker).
+    -> DECIDED: Upstox API (read-only Analytics Token preferred).
 [PRASAD] Pick the stock universe (e.g. Nifty 50, a custom watchlist, or broader).
+    -> DECIDED: Nifty 500.
 [PRASAD] Create a GCP project with billing enabled; get an Anthropic API key.
+    -> PENDING (Prasad). Not needed until Phase 4 (Anthropic key) / Phase 8-9 (GCP). DuckDB-first means we build Phases 2-3 with zero cloud cost.
 [CLAUDE] Recommend a dev strategy that keeps cost near zero until it works (local DuckDB + Parquet first, lift to BigQuery later).
+    -> DECIDED: DuckDB + Parquet locally now; BigQuery in prod behind the same StorageAdapter interface (flip STORAGE_BACKEND). Full rationale in docs/decisions.md.
+
+Phase 0 decisions log: docs/decisions.md
 
 Phase 1 — Scaffolding & environment
 

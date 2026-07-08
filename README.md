@@ -19,6 +19,9 @@ library computed and cites the rows behind every claim.
 Storage is behind one interface: **DuckDB** locally (free), **BigQuery** in prod (flip
 `STORAGE_BACKEND`). Same calling code either way.
 
+**Phase 0 decisions** (data source = Upstox, universe = Nifty 500, storage = DuckDB-first)
+are logged with rationale in [`docs/decisions.md`](docs/decisions.md).
+
 ## Layout
 ```
 src/asr/
