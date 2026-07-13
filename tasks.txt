@@ -31,9 +31,22 @@ Phase 1 — Scaffolding & environment
 Phase 2 — Data ingestion (deterministic)
 
 [CLAUDE] Broker API client wrapper (auth + rate limiting + retries) for the source you picked.
+    -> DONE. src/asr/ingest/upstox_client.py: v3 historical-candle, token-bucket rate limiter,
+       retries on 429/5xx only, hard-fail on 4xx. No order endpoints — research-only.
 [CLAUDE] Ingestors: historical OHLCV backfill, daily incremental, fundamentals, corporate actions.
+    -> DONE (OHLCV): src/asr/ingest/ohlcv.py — backfill + daily incremental, both idempotent
+       (upsert on instrument_key+ts), so re-runs never duplicate.
+    -> DEFERRED: fundamentals + corporate actions. Upstox exposes no endpoint for either;
+       they need a separate source and don't block Phases 3-6. See docs/decisions.md.
+    -> OPEN: are Upstox candles split/bonus adjusted? Must be settled before backtests
+       (Phase 6) are trusted. See docs/decisions.md.
 [CLAUDE] Storage adapter that writes to DuckDB locally and BigQuery in prod behind the same interface.
+    -> DONE. candles + instruments tables; upsert_candles / upsert_instruments /
+       latest_candle_ts on both adapters.
 [PRASAD] Authorize the broker (e.g. Kite needs a daily token handshake), run the initial backfill, eyeball the data.
+    -> TODO (Prasad): put the Upstox Analytics Token in .env, then run
+       `asr ingest backfill` and `asr ingest status`. Universe resolution already works
+       (all 500 Nifty constituents resolve; no token needed for that step).
 
 Phase 3 — Feature / indicator layer (deterministic)
 

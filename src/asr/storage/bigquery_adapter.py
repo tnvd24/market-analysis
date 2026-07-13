@@ -36,3 +36,15 @@ class BigQueryAdapter(StorageAdapter):
         # TODO(phase8): MERGE via staging table for true idempotency.
         self.write_df("candles", df, mode="append")
         return len(df)
+
+    def upsert_instruments(self, df: pd.DataFrame) -> int:
+        # The universe is small and fully re-derived each sync, so truncate-and-load
+        # is both idempotent and cheap here.
+        self.write_df("instruments", df, mode="replace")
+        return len(df)
+
+    def latest_candle_ts(self) -> dict[str, pd.Timestamp]:
+        rows = self.read_sql(
+            f"SELECT instrument_key, MAX(ts) AS last_ts FROM `{self._tbl('candles')}` GROUP BY 1"  # noqa: S608
+        )
+        return dict(zip(rows["instrument_key"], rows["last_ts"], strict=True))

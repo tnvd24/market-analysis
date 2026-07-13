@@ -25,7 +25,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-upstox = ["upstox-python-sdk>=2.15"]   # official SDK; used for v3 candle calls in Phase 2
+# We call the Upstox REST API directly with httpx (see ingest/upstox_client.py) rather
+# than the official SDK — fewer moving parts, and the read-only surface we need is small.
 dev = ["pytest>=8", "ruff>=0.6", "ipython>=8"]
 
 [project.scripts]
@@ -41,6 +42,10 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer.Option() in a default is the framework's idiom, not a mutable-default bug.
+"src/asr/cli.py" = ["B008"]
 
 [tool.ruff.format]
 docstring-code-format = true

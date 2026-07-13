@@ -19,6 +19,16 @@ class StorageAdapter(ABC):
         """Idempotent write of OHLCV keyed by (instrument_key, ts)."""
         ...
 
+    @abstractmethod
+    def upsert_instruments(self, df: pd.DataFrame) -> int:
+        """Idempotent write of the resolved universe, keyed by instrument_key."""
+        ...
+
+    @abstractmethod
+    def latest_candle_ts(self) -> dict[str, pd.Timestamp]:
+        """instrument_key -> newest stored candle ts. Drives incremental ingest."""
+        ...
+
 
 def get_storage() -> StorageAdapter:
     from ..config import settings

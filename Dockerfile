@@ -15,7 +15,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock* ./
 COPY src ./src
 # Runtime deps only (no dev), installed into a relocatable prefix.
-RUN uv pip install --prefix=/install ".[upstox]"
+RUN uv pip install --prefix=/install "."
 
 # ---- runtime: minimal production image ----
 FROM python:3.12-slim AS runtime
@@ -38,5 +38,5 @@ CMD ["asr", "--help"]
 FROM runtime AS dev
 USER root
 RUN pip install --no-cache-dir uv
-RUN uv pip install --system -e ".[upstox,dev]"
+RUN uv pip install --system -e ".[dev]"
 USER appuser
