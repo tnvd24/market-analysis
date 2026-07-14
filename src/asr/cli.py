@@ -455,6 +455,37 @@ def pack_build(
         print(f"[red]  {sym}: {err}[/red]")
 
 
+@app.command("pipeline")
+def pipeline_cmd(
+    full: bool = typer.Option(False, help="Backfill from scratch instead of pulling new days."),
+    years: int = typer.Option(3, help="Years of history, with --full."),
+    news_days: int = typer.Option(30, help="News lookback."),
+    out: str | None = typer.Option(None, help="Where to write packs. Default: packs/<today>/"),
+    strict: bool = typer.Option(True, help="Stop (non-zero) if quality checks find errors."),
+):
+    """Run everything: ingest → adjust → indicators → news → quality → packs.
+
+    This is the command a container or a scheduler runs. The stage order matters — `adjust`
+    must precede `features`, and `quality` gates the packs — so it lives in code rather than
+    in a cron line where it can rot.
+    """
+    from .pipeline import run_pipeline
+
+    with _handled():
+        report = run_pipeline(
+            years=years,
+            incremental=not full,
+            news_days=news_days,
+            pack_dir=out,
+            strict=strict,
+        )
+
+    if not report.ok:
+        raise typer.Exit(1)
+    print(f"[bold green]✓ pipeline complete — {report.packs_written} packs[/bold green]")
+    print("[dim]Paste one into Claude with prompts/analysis.md[/dim]")
+
+
 @app.command("info")
 def info():
     """Show effective config (no secrets)."""

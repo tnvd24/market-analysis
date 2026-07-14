@@ -162,18 +162,27 @@ pip install -e ".[dev]"
 
 ## 7. With Docker (any platform)
 
-Avoids the Python-version question entirely.
+Avoids the Python-version question entirely, and gives you one command for the whole chain:
 
 ```bash
-docker compose up -d --build
-docker compose exec asr asr ingest instruments
-docker compose exec asr asr pack build RELIANCE
+docker compose run --rm pipeline
 ```
 
-Lean production image (no dev tools):
+Full guide, including scheduling it: **[docker.md](docker.md)**.
+
+## 8. The whole pipeline in one command
+
+Rather than running the seven steps in §4 by hand:
+
 ```bash
-docker build --target runtime -t asr:prod .
+asr pipeline --full --years 3    # first run
+asr pipeline                     # daily: only the days you're missing
 ```
+
+The stage order is load-bearing — **`adjust` must run before `features`** (or indicators are
+computed on prices where a split still looks like a crash), and **`quality` gates the packs**
+(the run stops non-zero rather than writing numbers nobody should trust). `asr pipeline`
+encodes that order in code, where it can't rot the way a hand-written cron line does.
 
 ---
 

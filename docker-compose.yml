@@ -1,12 +1,45 @@
+# Two ways to run this:
+#
+#   docker compose run --rm pipeline    # the daily run, then exit   <- the normal one
+#   docker compose up -d shell          # a long-lived dev container to poke around in
+#
+# Works unchanged with Docker, Podman and Rancher Desktop — see docs/docker.md.
+#
+# No credentials are needed. The env vars below are optional: Compose substitutes them from
+# a `.env` file if one exists, and the `:-` defaults keep everything working when it doesn't.
+# (Deliberately not using `env_file:`, whose `required: false` flag is too new for
+# podman-compose. Plain substitution is understood by every implementation.)
+
 services:
-  asr:
+  # The job: runs the whole chain and exits. This is what you would schedule.
+  pipeline:
     build:
       context: .
-      target: dev        # editable install + dev tools; prod uses --target runtime
-    env_file: .env
+      target: runtime
+    image: asr:latest
+    environment:
+      # Optional — only adds the Upstox news feed on top of NSE's filings.
+      UPSTOX_ACCESS_TOKEN: ${UPSTOX_ACCESS_TOKEN:-}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-duckdb}
+      DUCKDB_PATH: /app/data/asr.duckdb
     volumes:
-      - ./:/app          # live code mount for dev
-      - ./data:/app/data # persist DuckDB
+      - ./data:/app/data    # DuckDB + the bhavcopy cache, so re-runs cost no network
+      - ./packs:/app/packs  # the research packs you actually read
+    command: ["asr", "pipeline", "--out", "/app/packs"]
+
+  # A dev shell: code live-mounted, test tools installed.
+  shell:
+    build:
+      context: .
+      target: dev
+    image: asr:dev
+    environment:
+      UPSTOX_ACCESS_TOKEN: ${UPSTOX_ACCESS_TOKEN:-}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-duckdb}
+      DUCKDB_PATH: /app/data/asr.duckdb
+    volumes:
+      - ./:/app             # live code
+      - ./data:/app/data
+      - ./packs:/app/packs
     working_dir: /app
-    # keep container alive so you can `docker compose exec asr asr info`
-    command: sleep infinity
+    command: ["sleep", "infinity"]

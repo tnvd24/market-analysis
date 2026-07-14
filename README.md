@@ -37,8 +37,9 @@ findings ride *inside* every pack.
 Storage sits behind one interface: **DuckDB** locally (free), **BigQuery** in prod (flip
 `STORAGE_BACKEND`). Same calling code either way.
 
-📖 **[Setup guide — Linux, macOS, Windows](docs/setup.md)** ·
-🗺️ [Roadmap](ROADMAP.md) · 🧠 [Why it's built this way](docs/decisions.md)
+📖 **[Setup — Linux, macOS, Windows](docs/setup.md)** · 🐳 **[Docker](docs/docker.md)** ·
+🗺️ [Roadmap](ROADMAP.md) · 🧠 [Why it's built this way](docs/decisions.md) ·
+📊 [Backtest results](docs/backtest-results.md)
 
 ## Layout
 ```
@@ -57,21 +58,30 @@ infra/            # Phases 8-9 — deploy manifests, DAGs
 ```
 
 ## Quickstart
+
+**With Docker** — one command, no Python setup, no credentials:
+```bash
+docker compose run --rm pipeline    # ingest → adjust → indicators → news → quality → packs
+```
+Packs land in `./packs/`. It exits non-zero if the data fails its quality checks, so it's
+safe to schedule. See **[docs/docker.md](docs/docker.md)**.
+
+**Locally:**
 ```bash
 uv venv --python 3.12 && source .venv/bin/activate
 uv pip install -e ".[dev]"
 
-asr ingest instruments        # the Nifty 500 universe
-asr ingest prices --years 3   # NSE bhavcopy -> candles
-asr ingest actions --years 3  # splits, bonuses, dividends
-asr ingest adjust             # restate prices for splits
-asr features build            # indicators, on adjusted prices
-asr quality                   # verify before you trust
-asr pack build RELIANCE       # the thing you actually read
+asr pipeline --full --years 3   # everything, from scratch
+asr pipeline                    # the daily run (only what's missing)
+asr pack build RELIANCE         # the thing you actually read
 ```
 Then paste that pack into Claude with [`prompts/analysis.md`](prompts/analysis.md).
 
-Full instructions for all three platforms (and Docker): **[docs/setup.md](docs/setup.md)**.
+The stages can also be run one at a time (`asr ingest prices`, `asr features build`,
+`asr quality`, …) — but `adjust` must precede `features`, and `quality` gates the packs, so
+`asr pipeline` encodes that order rather than leaving it to a cron line.
+
+Full instructions for all three platforms: **[docs/setup.md](docs/setup.md)**.
 
 ## Ingestion
 ```bash
