@@ -34,6 +34,11 @@ class StorageAdapter(ABC):
         """Idempotent write of indicators keyed by (instrument_key, ts)."""
         ...
 
+    @abstractmethod
+    def upsert_news(self, df: pd.DataFrame) -> int:
+        """Idempotent write of news/filings keyed by the content id."""
+        ...
+
 
 def get_storage() -> StorageAdapter:
     from ..config import settings

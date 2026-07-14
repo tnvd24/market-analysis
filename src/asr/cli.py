@@ -13,8 +13,10 @@ from rich.table import Table
 app = typer.Typer(help="Agentic stock research (research-only).")
 ingest = typer.Typer(help="Phase 2: data ingestion")
 features = typer.Typer(help="Phase 3: deterministic indicators")
+news = typer.Typer(help="Phase 4: news & filings")
 app.add_typer(ingest, name="ingest")
 app.add_typer(features, name="features")
+app.add_typer(news, name="news")
 
 
 def _progress() -> Progress:
@@ -203,6 +205,63 @@ def features_show(symbol: str, days: int = typer.Option(10, help="Rows to show."
     )
     if df.empty:
         print(f"[yellow]No features for {symbol}. Run `asr features build`.[/yellow]")
+        raise typer.Exit(1)
+    print(df.to_string(index=False))
+
+
+@news.command("fetch")
+def news_fetch(
+    days: int = typer.Option(30, help="Lookback window."),
+    limit: int | None = typer.Option(None, help="Only the first N instruments."),
+    symbol: list[str] = typer.Option(None, help="Restrict to these NSE symbols."),
+    source: str = typer.Option("all", help="all | nse | upstox"),
+):
+    """Pull NSE filings and Upstox news for the universe -> news."""
+    from .news.fetch import fetch_news
+    from .news.schema import SOURCE_NSE, SOURCE_UPSTOX
+    from .storage.base import get_storage
+
+    chosen = {
+        "all": (SOURCE_NSE, SOURCE_UPSTOX),
+        "nse": (SOURCE_NSE,),
+        "upstox": (SOURCE_UPSTOX,),
+    }.get(source)
+    if chosen is None:
+        raise typer.BadParameter("source must be one of: all, nse, upstox")
+
+    storage = get_storage()
+    total = _count(storage, "SELECT COUNT(*) AS n FROM instruments")
+    if not total:
+        print("[yellow]No instruments stored. Run `asr ingest instruments` first.[/yellow]")
+        raise typer.Exit(1)
+
+    with _progress() as bar:
+        task = bar.add_task("news", total=limit or len(symbol or []) or total)
+        report = fetch_news(
+            symbols=symbol or None,
+            limit=limit,
+            days=days,
+            sources=chosen,
+            storage=storage,
+            on_progress=lambda *_: bar.advance(task),
+        )
+    print(f"[green]{report.summary()}[/green]")
+    for what, err in list(report.failures.items())[:5]:
+        print(f"[red]  {what}: {err}[/red]")
+
+
+@news.command("show")
+def news_show(symbol: str, limit: int = typer.Option(10, help="Rows to show.")):
+    """Latest filings and headlines for one ticker."""
+    from .storage.base import get_storage
+
+    df = get_storage().read_sql(
+        "SELECT published_at, source, category, headline FROM news "
+        f"WHERE symbol = '{symbol.strip().upper()}' "  # noqa: S608
+        f"ORDER BY published_at DESC LIMIT {int(limit)}"
+    )
+    if df.empty:
+        print(f"[yellow]No news for {symbol}. Run `asr news fetch`.[/yellow]")
         raise typer.Exit(1)
     print(df.to_string(index=False))
 

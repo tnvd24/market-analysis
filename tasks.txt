@@ -71,7 +71,22 @@ full recompute. Warmup rows are NULL, never 0.
 Phase 4 — News & sentiment (LLM, grounded)
 
 [PRASAD] Choose/authorize a legit news source (broker news feed, a news API, or curated RSS — not open-web scraping).
+    -> DECIDED: two sources. (1) NSE corporate announcements = PRIMARY (the company's own
+       filing to the exchange; no auth; verified live). (2) Upstox News API = SECONDARY
+       (journalism; needs the token). Kite was considered and rejected: Kite Connect has
+       NO news endpoint, and adopting it would add a daily token handshake plus an
+       order-capable session. No open-web scraping anywhere.
+[CLAUDE] News fetch layer (deterministic, no LLM).
+    -> DONE. src/asr/news/{nse,upstox_news,fetch,schema}.py -> `news` table.
+       Dedup on a content id (news windows always overlap). `asr news fetch` / `asr news show`.
 [CLAUDE] Claude-based extractor that turns articles into structured JSON (sentiment, catalyst type, entities) against a Pydantic schema, with dedup and timestamps.
+    -> BLOCKED on the Anthropic API key. NOTE: the Claude Pro/Max subscription does NOT
+       cover the Developer API — it is separate pay-as-you-go credit. Extraction is the
+       first real spend in this project; the fetch layer above costs nothing.
+    -> Known ceiling: Upstox returns headline+summary only (no article body — following the
+       link would be scraping). NSE's gist is sometimes boilerplate, with the substance in
+       the linked PDF. If extraction proves too thin, parse the NSE PDFs (the exchange's own
+       documents, so not scraping). See docs/decisions.md.
 
 Phase 5 — Agentic reasoning layer (Claude)
 

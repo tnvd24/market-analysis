@@ -74,8 +74,24 @@ rolling window ever spans two stocks) and recomputed in full rather than appende
 EMA and RSI carry state from every prior bar. Warmup rows are **NULL, not 0** — "not enough
 history" must never read as "RSI 0".
 
+## News & filings (Phase 4 — fetch layer)
+```bash
+asr news fetch --days 30            # NSE filings + Upstox news -> news
+asr news fetch --source nse         # filings only (needs no token)
+asr news show RELIANCE
+```
+Two sources, ranked by authority: **NSE corporate announcements** (primary — the company's
+own filing to the exchange) and the **Upstox News API** (secondary — reporting about it).
+No open-web scraping. Rows are deduped on a content id, because news windows always overlap
+— you re-fetch "the last 30 days" every day.
+
+The Claude extractor (articles → structured sentiment/catalyst JSON) is the next step and
+needs an Anthropic API key.
+
 ## What YOU need to provide
 1. **Upstox Analytics Token** — Upstox → Developer Apps → generate the 1-year,
    read-only **Analytics Token**. Paste into `UPSTOX_ACCESS_TOKEN` in `.env`.
    This is the only thing standing between you and real candles.
-2. **Anthropic API key** — paste into `ANTHROPIC_API_KEY` (only needed from Phase 4).
+2. **Anthropic API key** — paste into `ANTHROPIC_API_KEY` (needed from Phase 4).
+   Note: a Claude Pro/Max subscription does **not** cover the Developer API — it's
+   separate pay-as-you-go credit from console.anthropic.com.

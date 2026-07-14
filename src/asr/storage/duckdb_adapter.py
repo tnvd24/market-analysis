@@ -7,6 +7,7 @@ import pandas as pd
 
 from ..config import settings
 from ..features.schema import FEATURE_COLUMNS
+from ..news.schema import NEWS_COLUMNS
 from .base import StorageAdapter
 
 CANDLES_DDL = """
@@ -30,6 +31,21 @@ CREATE TABLE IF NOT EXISTS instruments (
     symbol         VARCHAR,
     isin           VARCHAR,
     name           VARCHAR
+);
+"""
+
+NEWS_DDL = """
+CREATE TABLE IF NOT EXISTS news (
+    id             VARCHAR PRIMARY KEY,
+    instrument_key VARCHAR,
+    symbol         VARCHAR,
+    source         VARCHAR,
+    published_at   TIMESTAMP,
+    category       VARCHAR,
+    headline       VARCHAR,
+    summary        VARCHAR,
+    url            VARCHAR,
+    fetched_at     TIMESTAMP
 );
 """
 
@@ -57,6 +73,7 @@ class DuckDBAdapter(StorageAdapter):
         self._con.execute(CANDLES_DDL)
         self._con.execute(INSTRUMENTS_DDL)
         self._con.execute(FEATURES_DDL)
+        self._con.execute(NEWS_DDL)
 
     def write_df(self, table: str, df: pd.DataFrame, mode: str = "append") -> None:
         if mode == "replace":
@@ -90,6 +107,9 @@ class DuckDBAdapter(StorageAdapter):
 
     def upsert_features(self, df: pd.DataFrame) -> int:
         return self._upsert("features", df, FEATURE_COLS, "_f")
+
+    def upsert_news(self, df: pd.DataFrame) -> int:
+        return self._upsert("news", df, NEWS_COLUMNS, "_n")
 
     def latest_candle_ts(self) -> dict[str, pd.Timestamp]:
         rows = self._con.execute(

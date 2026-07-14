@@ -115,6 +115,62 @@ symbol can't abort a 500-stock backfill.
   known split and check for an unexplained price discontinuity on the ex-date. This must be
   settled before any backtest result is trusted.
 
+## Phase 4 — News sources (fetch layer)
+
+### Upstox, not Kite — and Kite wouldn't have worked anyway
+Upstox ships a **News API** (`GET /v2/news`, `category=instrument_keys`, ≤30 keys per
+request, paginated). **Kite Connect has no news endpoint at all** — so switching brokers
+for news would not have solved the problem, while costing a second account, a second auth
+flow, Kite's *daily* token handshake, and an order-capable session that cuts against the
+research-only boundary. We stay single-broker on one read-only Analytics Token.
+
+### Two sources, ranked by authority
+| Source | What it is | Auth |
+|--------|-----------|------|
+| `nse_announcement` | **Primary** — the company's own filing to the exchange | none |
+| `upstox_news` | **Secondary** — a journalist's reporting about the company | token |
+
+Both normalise into one `news` table with a `source` column, because Phase 5 wants
+"everything known about RELIANCE this week" in one query. Keeping `source` lets a synthesis
+agent weight a filing above a headline, and `url` always points at the underlying document
+so any claim can be traced back.
+
+### NSE filings carry the weight
+For a system whose premise is grounding, a filing outranks a headline. NSE's endpoint
+filters by symbol and date and returns a filing type (`desc`), its gist (`attchmntText`),
+a PDF link, and a `seq_id` we dedup on. **Verified live: 65 filings across 3 tickers.**
+
+Two quirks, both handled in `news/nse.py`:
+- **Cookie priming.** The JSON endpoint 403s if called cold; the HTML page must be loaded
+  first to obtain cookies. Cookies also go stale, so a 401/403/429 forces a *re-prime*
+  before the retry rather than reusing the dead session.
+- **`an_dt` is `dd-Mon-yyyy HH:MM:SS` in IST with no timezone marker.** Parsed explicitly
+  and stored tz-naive IST — the same clock as the candles, so a filing lines up against the
+  day it moved the price.
+
+### The known ceiling on text quality
+- **Upstox news returns headline + summary + link, never the article body.** Following the
+  link would be scraping publisher sites, which this project rules out. So the extractor
+  reasons over the summary and cites the link.
+- **NSE's gist is sometimes boilerplate.** "…has informed the Exchange about Credit Rating"
+  — the actual rating lives in the linked PDF. Others are genuinely rich ("Board meeting on
+  July 17 to consider results").
+- **If that proves too thin, the next step is parsing the NSE PDFs** — those are the
+  exchange's own documents, not a publisher's, so fetching them is not scraping. Deferred
+  until we see whether the extractor needs it.
+
+### Idempotency matters more here than for candles
+News windows *always* overlap: you re-fetch "the last 30 days" every day. Rows are upserted
+on a content id (the source's own id where it has one, else a hash of source+symbol+URL).
+The same wire story about two stocks stays two rows — each stock keeps its own evidence.
+Verified live: re-running an identical fetch leaves 65 rows, not 130.
+
+### Anthropic API billing is separate from the Claude subscription
+A Pro/Max plan covers claude.ai and Claude Code; the Developer API is pay-as-you-go credits
+on the same login. Phase 4's extractor is therefore genuinely new spend — which is why the
+fetch layer is deterministic and free, and only extraction costs tokens (with dedup, so we
+never re-pay for the same article).
+
 ## Phase 3 — Indicators
 
 ### Stable column names, not pandas-ta's

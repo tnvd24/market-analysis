@@ -42,6 +42,12 @@ class BigQueryAdapter(StorageAdapter):
         self.write_df("features", df, mode="append")
         return len(df)
 
+    def upsert_news(self, df: pd.DataFrame) -> int:
+        # TODO(phase8): MERGE on id. News windows always overlap, so append-only would
+        # duplicate heavily here — this must land before the BigQuery backend is used.
+        self.write_df("news", df, mode="append")
+        return len(df)
+
     def upsert_instruments(self, df: pd.DataFrame) -> int:
         # The universe is small and fully re-derived each sync, so truncate-and-load
         # is both idempotent and cheap here.

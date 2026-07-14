@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import gzip
 import json
-import threading
-import time
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -27,6 +25,19 @@ import pandas as pd
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..config import settings
+from ..ratelimit import RateLimiter
+
+__all__ = [
+    "MAX_WINDOW_DAYS",
+    "RateLimiter",
+    "UpstoxClient",
+    "UpstoxError",
+    "UpstoxTransientError",
+    "download_nse_master",
+    "parse_candles",
+    "read_master",
+    "split_windows",
+]
 
 BASE = "https://api.upstox.com"
 
@@ -48,29 +59,6 @@ class UpstoxError(RuntimeError):
 
 class UpstoxTransientError(RuntimeError):
     """Rate limit / server hiccup / network blip — worth retrying."""
-
-
-class RateLimiter:
-    """Token bucket. Upstox allows ~25 req/s; we stay well under it."""
-
-    def __init__(self, rate_per_sec: float = 8.0, burst: int = 8):
-        self.rate = rate_per_sec
-        self.burst = burst
-        self._tokens = float(burst)
-        self._updated = time.monotonic()
-        self._lock = threading.Lock()
-
-    def acquire(self) -> None:
-        with self._lock:
-            now = time.monotonic()
-            self._tokens = min(self.burst, self._tokens + (now - self._updated) * self.rate)
-            self._updated = now
-            if self._tokens < 1.0:
-                time.sleep((1.0 - self._tokens) / self.rate)
-                self._tokens = 0.0
-                self._updated = time.monotonic()
-            else:
-                self._tokens -= 1.0
 
 
 @dataclass(frozen=True)
