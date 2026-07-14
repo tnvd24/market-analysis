@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import date, timedelta
 
+import pandas as pd
 import typer
 from rich import print
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
@@ -59,12 +60,12 @@ def _report(report) -> None:
 
 @contextmanager
 def _handled():
-    """Config problems (no token, no universe) are operator errors, not crashes."""
+    """Setup problems (no universe, no instruments) are operator errors, not crashes."""
     from .ingest.upstox_client import UpstoxError
 
     try:
         yield
-    except (UpstoxError, FileNotFoundError) as exc:
+    except (UpstoxError, FileNotFoundError, LookupError) as exc:
         print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from None
 
@@ -84,46 +85,80 @@ def ingest_instruments(
         print(unresolved[["symbol", "isin"]].head(20).to_string(index=False))
 
 
-@ingest.command("backfill")
-def ingest_backfill(
-    years: int = typer.Option(3, help="Years of daily history to pull."),
-    limit: int | None = typer.Option(None, help="Only the first N instruments (smoke runs)."),
-    symbol: list[str] = typer.Option(None, help="Restrict to these NSE symbols."),
+@ingest.command("prices")
+def ingest_prices_cmd(
+    years: int = typer.Option(3, help="Years of history to backfill."),
+    since: str | None = typer.Option(None, help="Start date (YYYY-MM-DD). Overrides --years."),
+    incremental: bool = typer.Option(False, help="Only the days missing since the last candle."),
 ):
-    """Historical daily OHLCV for the stored universe -> candles."""
-    from .ingest.ohlcv import backfill
+    """Daily OHLCV from NSE bhavcopy -> candles. No token needed."""
+    from .ingest.prices import backfill, daily, ingest_prices
     from .storage.base import get_storage
 
     storage = get_storage()
-    keys = _select_keys(storage, symbol, limit)
-    print(f"Backfilling {len(keys)} instruments, {years}y of daily candles...")
-
-    with _handled(), _progress() as bar:
-        task = bar.add_task("backfill", total=len(keys))
-        report = backfill(
-            keys, years=years, storage=storage, on_progress=lambda *_: bar.advance(task)
-        )
-        bar.update(task, completed=len(keys))
+    with _handled():
+        if incremental:
+            report = daily(storage=storage)
+        elif since:
+            start = date.fromisoformat(since)
+            print(f"Pulling bhavcopy from {start} ({(date.today() - start).days} calendar days)...")
+            report = ingest_prices(start, storage=storage)
+        else:
+            print(f"Backfilling {years}y of bhavcopy (one request per trading day)...")
+            report = backfill(years=years, storage=storage)
     _report(report)
+    print("[dim]Next: `asr ingest actions` then `asr ingest adjust`.[/dim]")
 
 
-@ingest.command("daily")
-def ingest_daily(
-    limit: int | None = typer.Option(None, help="Only the first N instruments."),
-    symbol: list[str] = typer.Option(None, help="Restrict to these NSE symbols."),
-):
-    """Incremental pull: only the candles newer than what's already stored."""
-    from .ingest.ohlcv import daily_incremental
+@ingest.command("actions")
+def ingest_actions(years: int = typer.Option(3, help="Years of corporate actions to pull.")):
+    """Splits, bonuses and dividends from NSE -> corporate_actions."""
+    from .ingest.corporate_actions import CorporateActions
     from .storage.base import get_storage
 
     storage = get_storage()
-    keys = _select_keys(storage, symbol, limit)
+    until = date.today()
+    start = until - timedelta(days=365 * years)
+    client = CorporateActions()
 
-    with _handled(), _progress() as bar:
-        task = bar.add_task("daily", total=len(keys))
-        report = daily_incremental(keys, storage=storage, on_progress=lambda *_: bar.advance(task))
-        bar.update(task, completed=len(keys))
-    _report(report)
+    # NSE caps how wide a single query may be, so walk the range in quarters.
+    frames, cursor = [], start
+    with _progress() as bar:
+        total = max(1, (until - start).days // 90 + 1)
+        task = bar.add_task("actions", total=total)
+        while cursor < until:
+            end = min(cursor + timedelta(days=90), until)
+            frames.append(client.fetch(cursor, end))
+            bar.advance(task)
+            cursor = end + timedelta(days=1)
+
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if df.empty:
+        print("[yellow]No corporate actions returned.[/yellow]")
+        return
+    df = df.drop_duplicates(subset="id")
+    n = storage.upsert_corporate_actions(df)
+
+    kinds = df["action_type"].value_counts().to_dict()
+    print(f"[green]Stored {n} corporate actions[/green] {kinds}")
+    review = df[df["needs_review"]]
+    if len(review):
+        print(f"[red]{len(review)} could not be parsed into a ratio (prices NOT adjusted):[/red]")
+        for r in review.head(10).itertuples():
+            print(f"[red]  {r.symbol} {pd.Timestamp(r.ex_date).date()}: {r.subject}[/red]")
+
+
+@ingest.command("adjust")
+def ingest_adjust():
+    """Recompute split/bonus adjustment factors over the stored candles."""
+    from .ingest.adjust import apply_adjustments
+    from .storage.base import get_storage
+
+    report = apply_adjustments(get_storage())
+    print(f"[green]{report.summary()}[/green]")
+    for item in report.needs_review[:10]:
+        print(f"[red]  needs review: {item}[/red]")
+    print("[dim]Rebuild indicators on the corrected prices: `asr features build`.[/dim]")
 
 
 @ingest.command("status")
@@ -137,32 +172,22 @@ def ingest_status():
         "SELECT COUNT(*) AS n_rows, COUNT(DISTINCT instrument_key) AS covered, "
         "MIN(ts) AS first_ts, MAX(ts) AS last_ts FROM candles"
     ).iloc[0]
+    acts = storage.read_sql(
+        "SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE needs_review) AS review "
+        "FROM corporate_actions"
+    ).iloc[0]
+    adj = storage.read_sql(
+        "SELECT COUNT(*) AS n FROM candles WHERE adj_factor IS NOT NULL AND adj_factor <> 1.0"
+    ).iloc[0]["n"]
 
-    t = Table(title="Ingest status", show_header=False)
+    t = Table(title="Warehouse status", show_header=False)
     t.add_row("instruments (universe)", str(int(n_inst)))
     t.add_row("instruments with candles", str(int(stats["covered"])))
     t.add_row("candle rows", f"{int(stats['n_rows']):,}")
     t.add_row("date range", f"{stats['first_ts']} → {stats['last_ts']}")
+    t.add_row("corporate actions", f"{int(acts['n'])} ({int(acts['review'])} need review)")
+    t.add_row("adjusted candles", f"{int(adj):,}")
     print(t)
-
-
-@ingest.command("smoke")
-def ingest_smoke(instrument_key: str = "NSE_EQ|INE848E01016", days: int = 30):
-    """Pull recent daily candles for one instrument and store them. Auth check."""
-    from .ingest.ohlcv import ingest_range
-    from .storage.base import get_storage
-
-    storage = get_storage()
-    to_d = date.today()
-    with _handled():
-        report = ingest_range([instrument_key], to_d - timedelta(days=days), to_d, storage=storage)
-    _report(report)
-    print(
-        storage.read_sql(
-            "SELECT * FROM candles WHERE instrument_key = "
-            f"'{instrument_key}' ORDER BY ts DESC LIMIT 5"  # noqa: S608
-        )
-    )
 
 
 @features.command("build")

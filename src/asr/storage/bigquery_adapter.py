@@ -42,6 +42,19 @@ class BigQueryAdapter(StorageAdapter):
         self.write_df("features", df, mode="append")
         return len(df)
 
+    def upsert_corporate_actions(self, df: pd.DataFrame) -> int:
+        self.write_df("corporate_actions", df, mode="replace")
+        return len(df)
+
+    def reset_adj_factors(self) -> None:
+        self.client.query(
+            f"UPDATE `{self._tbl('candles')}` SET adj_factor = 1.0 WHERE TRUE"
+        ).result()
+
+    def update_adj_factors(self, df: pd.DataFrame) -> int:
+        # TODO(phase8): MERGE from a staging table, same shape as the candle upsert.
+        raise NotImplementedError("adj_factor updates need a staging MERGE on BigQuery")
+
     def upsert_news(self, df: pd.DataFrame) -> int:
         # TODO(phase8): MERGE on id. News windows always overlap, so append-only would
         # duplicate heavily here — this must land before the BigQuery backend is used.

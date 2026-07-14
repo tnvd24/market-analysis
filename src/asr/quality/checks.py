@@ -148,19 +148,24 @@ def check_ohlc_sanity(storage: StorageAdapter) -> list[Finding]:
 
 
 def check_price_jumps(storage: StorageAdapter, threshold: float = SPLIT_JUMP_PCT) -> list[Finding]:
-    """Overnight moves too large to be trading — almost certainly an unadjusted split/bonus.
+    """Overnight moves too large to be trading, measured on **adjusted** prices.
 
-    **This is the check that answers the open question** of whether Upstox candles are
-    corporate-action adjusted. If they are, this stays quiet. If they aren't, every affected
-    stock lights up here instead of silently poisoning its indicators and backtests.
+    This runs *after* adjustment, so a split we corrected for is invisible here — which is
+    the point. What survives is a jump we cannot explain: a corporate action NSE didn't
+    publish, one we failed to parse, or genuinely bad data. Either way it is a number nobody
+    should build an indicator on until it is understood.
     """
     jumps = _q(
         storage,
         f"""
-        WITH stepped AS (
-            SELECT symbol, ts, close,
-                   LAG(close) OVER (PARTITION BY instrument_key ORDER BY ts) AS prev_close
+        WITH adj AS (
+            SELECT symbol, ts, close / COALESCE(NULLIF(adj_factor, 0), 1.0) AS close
             FROM candles
+        ),
+        stepped AS (
+            SELECT symbol, ts, close,
+                   LAG(close) OVER (PARTITION BY symbol ORDER BY ts) AS prev_close
+            FROM adj
         )
         SELECT symbol, ts, prev_close, close,
                (close - prev_close) / prev_close AS move
@@ -173,19 +178,73 @@ def check_price_jumps(storage: StorageAdapter, threshold: float = SPLIT_JUMP_PCT
     out = []
     for r in jumps.itertuples():
         pct = r.move * 100
-        # A move that lands near a clean split ratio is the giveaway.
-        hint = " — close to a 1:2 split/bonus ratio" if -60 < pct < -40 else ""
+        # A move that lands near a clean ratio suggests a corporate action we missed.
+        hint = (
+            " — near a 1:2 split/bonus ratio, so an action may be missing"
+            if -60 < pct < -40
+            else ""
+        )
         out.append(
             Finding(
                 WARN,
                 "price_jump",
                 r.symbol,
                 f"{pct:+.1f}% overnight on {pd.Timestamp(r.ts).date()} "
-                f"({r.prev_close:.2f} -> {r.close:.2f}){hint}. "
-                "Verify against a corporate action before trusting this stock's indicators.",
+                f"({r.prev_close:.2f} -> {r.close:.2f}), after adjustment{hint}. "
+                "Unexplained — verify before trusting this stock's indicators.",
             )
         )
     return out
+
+
+def check_rights_issues(storage: StorageAdapter) -> list[Finding]:
+    """Rights issues dilute, and we deliberately do not adjust for them.
+
+    A WARN, not an ERROR: the effect is far smaller than a split, and adjusting properly needs
+    the issue price and the market price on the ex-date. This is a caveat the reader should
+    see, not a reason to distrust the series — and an alarm that fired on every stock that
+    ever raised rights would simply be tuned out, which defeats the point of the layer.
+    """
+    rows = _q(
+        storage,
+        "SELECT symbol, ex_date, subject FROM corporate_actions "
+        "WHERE action_type = 'rights' ORDER BY ex_date DESC",
+    )
+    return [
+        Finding(
+            WARN,
+            "rights_issue",
+            r.symbol,
+            f"rights issue on {pd.Timestamp(r.ex_date).date()} — prices are NOT adjusted for "
+            f'dilution: "{r.subject}"',
+        )
+        for r in rows.itertuples()
+    ]
+
+
+def check_unparsed_actions(storage: StorageAdapter) -> list[Finding]:
+    """Splits and bonuses whose ratio we refused to guess at.
+
+    A split we cannot parse is worse than one we know nothing about: the prices *look*
+    continuous while being silently wrong across the ex-date. Refusing to guess is only safe
+    if the refusal is visible, so it is an ERROR — this stock's history is not trustworthy
+    until a human reads the action and supplies the ratio.
+    """
+    rows = _q(
+        storage,
+        "SELECT symbol, ex_date, subject FROM corporate_actions "
+        "WHERE needs_review ORDER BY ex_date DESC",
+    )
+    return [
+        Finding(
+            ERROR,
+            "unparsed_action",
+            r.symbol,
+            f"corporate action on {pd.Timestamp(r.ex_date).date()} could not be parsed into a "
+            f'ratio, so prices before it are NOT adjusted: "{r.subject}"',
+        )
+        for r in rows.itertuples()
+    ]
 
 
 def check_gaps(storage: StorageAdapter, max_gap_days: int = MAX_GAP_DAYS) -> list[Finding]:
@@ -317,6 +376,8 @@ def run_checks(
         *check_ohlc_sanity(storage),
         *check_duplicate_candles(storage),
         *check_future_timestamps(storage, as_of),
+        *check_unparsed_actions(storage),
+        *check_rights_issues(storage),
         *check_price_jumps(storage),
         *check_gaps(storage),
         *check_staleness(storage, as_of),

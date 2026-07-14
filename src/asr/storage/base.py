@@ -39,6 +39,21 @@ class StorageAdapter(ABC):
         """Idempotent write of news/filings keyed by the content id."""
         ...
 
+    @abstractmethod
+    def upsert_corporate_actions(self, df: pd.DataFrame) -> int:
+        """Idempotent write of splits/bonuses/dividends keyed by the action id."""
+        ...
+
+    @abstractmethod
+    def reset_adj_factors(self) -> None:
+        """Set every candle's adj_factor back to 1.0 before a recompute."""
+        ...
+
+    @abstractmethod
+    def update_adj_factors(self, df: pd.DataFrame) -> int:
+        """Write recomputed adj_factors for (instrument_key, ts)."""
+        ...
+
 
 def get_storage() -> StorageAdapter:
     from ..config import settings

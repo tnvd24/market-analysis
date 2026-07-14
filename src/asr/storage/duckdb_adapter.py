@@ -21,7 +21,23 @@ CREATE TABLE IF NOT EXISTS candles (
     close          DOUBLE,
     volume         BIGINT,
     oi             BIGINT,
+    -- Raw prices are stored as traded and never overwritten. adj_factor restates them for
+    -- splits/bonuses (see ingest/adjust.py), so the adjustment stays reversible and auditable.
+    adj_factor     DOUBLE DEFAULT 1.0,
     PRIMARY KEY (instrument_key, ts)
+);
+"""
+
+CORPORATE_ACTIONS_DDL = """
+CREATE TABLE IF NOT EXISTS corporate_actions (
+    id           VARCHAR PRIMARY KEY,
+    symbol       VARCHAR,
+    isin         VARCHAR,
+    ex_date      TIMESTAMP,
+    action_type  VARCHAR,
+    subject      VARCHAR,
+    factor       DOUBLE,      -- what pre-ex-date prices are divided by; NULL = do not adjust
+    needs_review BOOLEAN      -- a ratio we refused to guess at
 );
 """
 
@@ -52,6 +68,16 @@ CREATE TABLE IF NOT EXISTS news (
 CANDLE_COLS = ["instrument_key", "symbol", "ts", "open", "high", "low", "close", "volume", "oi"]
 INSTRUMENT_COLS = ["instrument_key", "symbol", "isin", "name"]
 FEATURE_COLS = ["instrument_key", "symbol", "ts", *FEATURE_COLUMNS]
+ACTION_COLS = [
+    "id",
+    "symbol",
+    "isin",
+    "ex_date",
+    "action_type",
+    "subject",
+    "factor",
+    "needs_review",
+]
 
 # Derived from FEATURE_COLUMNS so the table can never drift from what the layer computes.
 FEATURES_DDL = f"""
@@ -74,6 +100,11 @@ class DuckDBAdapter(StorageAdapter):
         self._con.execute(INSTRUMENTS_DDL)
         self._con.execute(FEATURES_DDL)
         self._con.execute(NEWS_DDL)
+        self._con.execute(CORPORATE_ACTIONS_DDL)
+        # Databases created before adjustment existed predate this column.
+        self._con.execute(
+            "ALTER TABLE candles ADD COLUMN IF NOT EXISTS adj_factor DOUBLE DEFAULT 1.0"
+        )
 
     def write_df(self, table: str, df: pd.DataFrame, mode: str = "append") -> None:
         if mode == "replace":
@@ -92,8 +123,11 @@ class DuckDBAdapter(StorageAdapter):
             return 0
         staged = df.reindex(columns=cols)  # missing columns arrive as NULL, extras dropped
         self._con.register(alias, staged)
+        # Columns are named explicitly so a table can carry columns the writer doesn't set
+        # (candles.adj_factor is owned by the adjustment job, not by ingestion).
+        names = ", ".join(cols)
         self._con.execute(
-            f"INSERT OR REPLACE INTO {table} SELECT {', '.join(cols)} FROM {alias}"  # noqa: S608
+            f"INSERT OR REPLACE INTO {table} ({names}) SELECT {names} FROM {alias}"  # noqa: S608
         )
         self._con.unregister(alias)
         self._con.commit()
@@ -101,6 +135,26 @@ class DuckDBAdapter(StorageAdapter):
 
     def upsert_candles(self, df: pd.DataFrame) -> int:
         return self._upsert("candles", df, CANDLE_COLS, "_c")
+
+    def upsert_corporate_actions(self, df: pd.DataFrame) -> int:
+        return self._upsert("corporate_actions", df, ACTION_COLS, "_a")
+
+    def reset_adj_factors(self) -> None:
+        """Back to 1.0 before recomputing: a stale factor distorts prices as badly as none."""
+        self._con.execute("UPDATE candles SET adj_factor = 1.0")
+        self._con.commit()
+
+    def update_adj_factors(self, df: pd.DataFrame) -> int:
+        if df.empty:
+            return 0
+        self._con.register("_af", df[["instrument_key", "ts", "adj_factor"]])
+        self._con.execute(
+            "UPDATE candles SET adj_factor = _af.adj_factor FROM _af "
+            "WHERE candles.instrument_key = _af.instrument_key AND candles.ts = _af.ts"
+        )
+        self._con.unregister("_af")
+        self._con.commit()
+        return len(df)
 
     def upsert_instruments(self, df: pd.DataFrame) -> int:
         return self._upsert("instruments", df, INSTRUMENT_COLS, "_i")

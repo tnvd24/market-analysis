@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from ..ingest.adjust import adjusted
 from ..storage.base import StorageAdapter, get_storage
 from .indicators import compute_features
 from .schema import MIN_HISTORY
@@ -47,11 +48,14 @@ def build_features(
 
     for key in keys:
         candles = storage.read_sql(
-            "SELECT instrument_key, symbol, ts, open, high, low, close, volume "
+            "SELECT instrument_key, symbol, ts, open, high, low, close, volume, adj_factor "
             f"FROM candles WHERE instrument_key = '{key}' ORDER BY ts"  # noqa: S608
         )
         if candles.empty:
             continue
+        # Indicators are computed on split/bonus-adjusted prices. On raw prices, a split is
+        # an overnight 50% crash and every window spanning it is quietly wrong.
+        candles = adjusted(candles)
         if len(candles) < MIN_HISTORY:
             report.thin.append(key)
 

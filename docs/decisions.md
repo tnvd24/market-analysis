@@ -158,6 +158,65 @@ symbol can't abort a 500-stock backfill.
   known split and check for an unexplained price discontinuity on the ex-date. This must be
   settled before any backtest result is trusted.
 
+## Price source: NSE bhavcopy, not the broker (supersedes Phase 2)
+
+**The Upstox market-data client is retired. There is no token anywhere in the system.**
+
+Verified live before deciding:
+
+| | Upstox API | **NSE bhavcopy** |
+|---|---|---|
+| Auth | Analytics Token, renewed yearly | **none** |
+| Coverage | one instrument per request | **whole market per request** |
+| 3-year backfill | ~1,500 requests | **~750** (one per trading day) |
+| Split adjustment | undocumented — unknowable | **ours, from NSE's corporate-actions feed** |
+| Churn | v2→v3 deprecation mid-project; `UDAPI100050` | format changed once (2024); both handled |
+
+Bhavcopy *is* the file the broker's prices derive from, so this is a move toward the primary
+source, consistent with the rest of the design. Weaknesses are real but different: the site
+is bot-hostile (cookie priming, already proven by the news feed) and end-of-day only — which
+costs us nothing, since we only ever use daily candles.
+
+**The decisive argument was never the token — it was the splits.** Bhavcopy gives raw traded
+prices, and NSE separately publishes every corporate action with its ex-date. Together they
+let us *fix* the split problem deterministically instead of merely detecting it, which was
+all the quality check could ever do while a broker owned the adjustment.
+
+### How adjustment works
+`adj_factor(d)` = product of the ratios of every split/bonus with an ex-date after `d`.
+Then `adjusted_price = raw / adj_factor` and `adjusted_volume = raw * adj_factor`. **Raw
+prices are never overwritten** — the factor sits beside them, so the adjustment is
+reversible, auditable, and fully recomputed whenever a new action lands (a split announced
+tomorrow changes the correct factor for every bar before it).
+
+Indicators, signals, returns and the 52-week range are all computed on **adjusted** prices.
+
+### What adjusts, and what deliberately does not
+- **Splits and bonuses** adjust: they mechanically restate the share count.
+- **Dividends** are recorded, not adjusted. Standard technical analysis works on
+  split/bonus-adjusted prices; adjusting for dividends changes what the chart means.
+- **Rights issues** are recorded as a **WARN**, never adjusted: doing it properly needs the
+  issue price and the ex-date market price, and the effect is far smaller than a split.
+- **A split or bonus whose ratio we cannot read is an ERROR** and is *never guessed at*.
+  Guessing would leave prices looking continuous while being silently wrong — the exact
+  failure this project exists to prevent.
+
+Severity is calibrated so the alarm stays meaningful: if every rights issue were an ERROR,
+`asr quality` would fail forever on any stock that ever raised rights, and an alarm that is
+always on gets ignored.
+
+### The layer justified itself on its first live run
+The parser flagged 27 splits it could not read rather than assuming 1.0. All 27 were NSE
+writing the *singular* **"To Re 1/-"** (not "Rs") — the single commonest split there is.
+**One of them was KOTAKBANK's 5:1.** A regex that quietly matched nothing would have
+corrupted its entire price history with no error anywhere; instead the refusal-to-guess made
+it visible in minutes. That is the whole thesis of the quality layer, demonstrated on day one.
+
+**Live result:** 58,435 candles / 117 trading days, 1,977 corporate actions, **0 errors**.
+Four >20% overnight moves survive *after* adjustment and remain flagged as unexplained —
+possibly corporate actions NSE files under a name we don't parse (a demerger, say). Visible,
+not silently wrong.
+
 ## Phase 4 — News sources (fetch layer)
 
 ### Upstox, not Kite — and Kite wouldn't have worked anyway

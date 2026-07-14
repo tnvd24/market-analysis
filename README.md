@@ -55,18 +55,25 @@ Lean prod image (for Artifact Registry / Cloud Run later):
 
 ## Ingestion (Phase 2)
 ```bash
-asr ingest instruments        # Nifty 500 -> Upstox instrument keys (no token needed)
-asr ingest smoke              # one stock, 30 days — auth + storage check
-asr ingest backfill --years 3 # full daily history for the universe
-asr ingest daily              # incremental: only what's missing (schedule this)
-asr ingest status             # universe size, candle coverage, date range
+asr ingest instruments         # Nifty 500 -> instrument keys
+asr ingest prices --years 3    # daily OHLCV from NSE bhavcopy
+asr ingest actions --years 3   # splits, bonuses, dividends
+asr ingest adjust              # apply split/bonus adjustment to the stored prices
+asr ingest prices --incremental  # only the missing days (schedule this)
+asr ingest status
 ```
-Every write is an upsert keyed by `(instrument_key, ts)`, so an interrupted backfill is
-safe to re-run — it costs API calls, never duplicate rows. Candle timestamps are stored
-tz-naive **IST**.
+**No API token anywhere.** Prices come from **NSE bhavcopy** — the exchange's own end-of-day
+file, one request per trading day for the whole market. Nothing to sign up for or renew.
 
-`asr ingest instruments` downloads both the NSE Nifty 500 constituents CSV and the Upstox
-instrument master by itself, and joins them on ISIN. Nothing to download by hand.
+**Splits are adjusted, not just detected.** Raw traded prices are stored untouched, and an
+`adj_factor` computed from NSE's corporate-actions feed restates them, so a 1:2 split stops
+looking like a 50% crash. Indicators, returns and the 52-week range all use adjusted prices.
+A split whose ratio we *can't* read is an error, never a guess. Rights issues are flagged but
+not adjusted; dividends are recorded but not adjusted.
+
+Every write is an upsert keyed by `(instrument_key, ts)`, so an interrupted backfill is safe
+to re-run, and fetched days are cached on disk — a re-run costs no network at all. Candle
+timestamps are tz-naive **IST**.
 
 ## Indicators (Phase 3)
 ```bash
@@ -109,9 +116,9 @@ universe — none of these raise an exception, they just produce a confident, wr
 pack, so you can't read a stock's numbers without seeing that they may be suspect.
 
 ## What YOU need to provide
-1. **Upstox Analytics Token** — Upstox → Developer Apps → generate the 1-year,
-   read-only **Analytics Token**. Paste into `UPSTOX_ACCESS_TOKEN` in `.env`.
-   This is the only thing standing between you and real candles.
+1. ~~**Upstox Analytics Token**~~ — **no longer needed.** Prices come from NSE bhavcopy,
+   which needs no auth. (An Upstox token is only useful if you want their *news* feed on
+   top of NSE's filings; the market-data client is retired.)
 2. ~~**Anthropic API key**~~ — **no longer needed.** The system is deterministic end to
    end; the qualitative read happens by pasting a research pack into Claude on your
    subscription. (A Pro/Max plan does *not* cover the Developer API anyway — that's

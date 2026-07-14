@@ -22,6 +22,7 @@ from datetime import date, datetime
 import pandas as pd
 
 from ..features.signals import Signal, detect, detect_52w
+from ..ingest.adjust import adjusted
 from ..quality.checks import QualityReport, run_checks
 from ..storage.base import StorageAdapter, get_storage
 
@@ -123,12 +124,15 @@ def build_pack(
         raise LookupError(f"{symbol} is not in the stored universe. Run `asr ingest instruments`.")
     key = meta.iloc[0]["instrument_key"]
 
-    candles = storage.read_sql(
-        "SELECT ts, open, high, low, close, volume FROM candles "
+    raw = storage.read_sql(
+        "SELECT ts, open, high, low, close, volume, adj_factor FROM candles "
         f"WHERE instrument_key = '{key}' ORDER BY ts"  # noqa: S608
     )
-    if candles.empty:
-        raise LookupError(f"No candles stored for {symbol}. Run `asr ingest backfill`.")
+    if raw.empty:
+        raise LookupError(f"No candles stored for {symbol}. Run `asr ingest prices`.")
+    # Returns and the 52-week range must be computed on adjusted prices, or any window
+    # spanning a split reports a fake crash as if it were performance.
+    candles = adjusted(raw)
 
     feats = storage.read_sql(
         f"SELECT * FROM features WHERE instrument_key = '{key}' ORDER BY ts DESC LIMIT 2"  # noqa: S608

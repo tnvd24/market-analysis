@@ -30,16 +30,25 @@ Phase 1 — Scaffolding & environment
 
 Phase 2 — Data ingestion (deterministic)
 
+*** SUPERSEDED: the price source is now NSE BHAVCOPY, not Upstox. No token anywhere. ***
+    Kite has no news endpoint and Upstox's candle adjustment is undocumented; NSE bhavcopy is
+    the file both derive from. One request = the whole market for a day. Crucially, NSE also
+    publishes corporate actions, so we ADJUST for splits/bonuses ourselves, deterministically,
+    instead of trusting a broker. src/asr/ingest/{bhavcopy,corporate_actions,adjust,prices}.py
+    Live: 58,435 candles / 117 days / 1,977 actions / 0 errors. See docs/decisions.md.
+
 [CLAUDE] Broker API client wrapper (auth + rate limiting + retries) for the source you picked.
-    -> DONE. src/asr/ingest/upstox_client.py: v3 historical-candle, token-bucket rate limiter,
-       retries on 429/5xx only, hard-fail on 4xx. No order endpoints — research-only.
+    -> RETIRED. The Upstox market-data client is gone; upstox_client.py now only holds the
+       (auth-free) instrument master + error types used by the optional Upstox news feed.
 [CLAUDE] Ingestors: historical OHLCV backfill, daily incremental, fundamentals, corporate actions.
     -> DONE (OHLCV): src/asr/ingest/ohlcv.py — backfill + daily incremental, both idempotent
        (upsert on instrument_key+ts), so re-runs never duplicate.
-    -> DEFERRED: fundamentals + corporate actions. Upstox exposes no endpoint for either;
-       they need a separate source and don't block Phases 3-6. See docs/decisions.md.
-    -> OPEN: are Upstox candles split/bonus adjusted? Must be settled before backtests
-       (Phase 6) are trusted. See docs/decisions.md.
+    -> DONE (corporate actions): NSE publishes them. src/asr/ingest/corporate_actions.py.
+    -> DEFERRED: fundamentals. Still no free source; doesn't block Phases 3-6.
+    -> RESOLVED (was: are candles split-adjusted?): we no longer depend on anyone else's
+       adjustment. Bhavcopy is raw, and we adjust from NSE's corporate-action feed ourselves.
+       Splits/bonuses adjust; dividends are recorded but don't; rights are WARNed, not
+       adjusted; an unreadable ratio is an ERROR and is never guessed at.
 [CLAUDE] Storage adapter that writes to DuckDB locally and BigQuery in prod behind the same interface.
     -> DONE. candles + instruments tables; upsert_candles / upsert_instruments /
        latest_candle_ts on both adapters.
