@@ -135,6 +135,23 @@ universe — none of these raise an exception, they just produce a confident, wr
 `asr quality` turns each of those into a loud error, and its findings ride *inside* every
 pack, so you can't read a stock's numbers without seeing that they may be suspect.
 
+## Backtest — do the signals work?
+```bash
+asr backtest run RELIANCE --strategy sma_cross   # one stock vs buy-and-hold
+asr backtest universe --strategy rsi_reversion   # the same rule across all 500
+```
+**No. Not as mechanical trading rules — and that's a finding worth having.** Across 500 stocks
+and 3 years, *not one* rule beat buy-and-hold. The best won on 33% of stocks; MACD crossover on
+14%. They sit out ~60% of a rising market, and that costs more than their timing saves. They
+*do* cut drawdowns (−29% vs −41%) — they just don't earn their keep doing it.
+
+The engine is built to be hard to fool: positions are **shifted one bar** (a signal from
+today's close is traded tomorrow, never today), costs are real (25 bps/side), and every result
+carries the **survivorship-bias** warning that can't be engineered away.
+
+This is exactly why the pack presents signals as **observations, never recommendations**. Full
+write-up: **[docs/backtest-results.md](docs/backtest-results.md)**.
+
 ## Credentials
 
 **None required.** No broker account, no API key, no billing. That is a deliberate design

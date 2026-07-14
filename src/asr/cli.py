@@ -26,10 +26,12 @@ ingest = typer.Typer(help="Data ingestion: prices, corporate actions, universe")
 features = typer.Typer(help="Deterministic indicators")
 news = typer.Typer(help="News & corporate filings")
 pack = typer.Typer(help="Research packs (the handoff to a human/chat read)")
+backtest = typer.Typer(help="Measure a rule instead of believing it")
 app.add_typer(ingest, name="ingest")
 app.add_typer(features, name="features")
 app.add_typer(news, name="news")
 app.add_typer(pack, name="pack")
+app.add_typer(backtest, name="backtest")
 
 
 def _progress() -> Progress:
@@ -301,6 +303,90 @@ def news_show(symbol: str, limit: int = typer.Option(10, help="Rows to show.")):
         print(f"[yellow]No news for {symbol}. Run `asr news fetch`.[/yellow]")
         raise typer.Exit(1)
     print(df.to_string(index=False))
+
+
+@backtest.command("run")
+def backtest_run(
+    symbol: str = typer.Argument(..., help="Ticker, e.g. RELIANCE."),
+    strategy: str = typer.Option("sma_cross", help="See `asr backtest strategies`."),
+    since: str | None = typer.Option(None, help="Start date (YYYY-MM-DD)."),
+    cost_bps: float = typer.Option(25.0, help="One-way cost in bps (brokerage+STT+slippage)."),
+):
+    """Backtest one rule on one stock, against buy-and-hold."""
+    from .backtest.engine import SURVIVORSHIP_WARNING, run
+    from .storage.base import get_storage
+
+    with _handled():
+        r = run(symbol.upper(), strategy, since=since, cost_bps=cost_bps, storage=get_storage())
+
+    m, b = r.metrics, r.benchmark
+    t = Table(title=f"{r.symbol} · {r.strategy} · {cost_bps:.0f}bps/side")
+    t.add_column("")
+    t.add_column("strategy", justify="right")
+    t.add_column("buy & hold", justify="right")
+    t.add_row("total return", f"{m.total_return_pct:+.1f}%", f"{b.total_return_pct:+.1f}%")
+    t.add_row("CAGR", f"{m.cagr_pct:+.1f}%", f"{b.cagr_pct:+.1f}%")
+    t.add_row("Sharpe", f"{m.sharpe:.2f}", f"{b.sharpe:.2f}")
+    t.add_row("max drawdown", f"{m.max_drawdown_pct:.1f}%", f"{b.max_drawdown_pct:.1f}%")
+    t.add_row("volatility (ann.)", f"{m.ann_volatility_pct:.1f}%", f"{b.ann_volatility_pct:.1f}%")
+    t.add_row("trades", str(m.n_trades), "1")
+    t.add_row("win rate", f"{m.win_rate_pct:.0f}%" if m.win_rate_pct is not None else "—", "—")
+    t.add_row("time in market", f"{m.exposure_pct:.0f}%", "100%")
+    print(t)
+
+    verdict = "beat" if r.excess_return_pct > 0 else "LOST to"
+    colour = "green" if r.excess_return_pct > 0 else "red"
+    print(
+        f"[{colour}]{r.excess_return_pct:+.1f}% vs buy-and-hold — the rule {verdict} it.[/{colour}]"
+    )
+    print(f"[yellow]⚠️  {SURVIVORSHIP_WARNING}[/yellow]")
+
+
+@backtest.command("universe")
+def backtest_universe(
+    strategy: str = typer.Option("sma_cross", help="See `asr backtest strategies`."),
+    limit: int | None = typer.Option(None, help="Only the first N stocks."),
+    cost_bps: float = typer.Option(25.0, help="One-way cost in bps."),
+):
+    """Run one rule across the whole universe. One stock beating the market is noise."""
+    from .backtest.engine import SURVIVORSHIP_WARNING, aggregate, run_universe
+    from .storage.base import get_storage
+
+    with _handled():
+        results = run_universe(strategy, limit=limit, cost_bps=cost_bps, storage=get_storage())
+    if results.empty:
+        print("[yellow]Nothing to test. Run `asr features build` first.[/yellow]")
+        raise typer.Exit(1)
+
+    agg = aggregate(results)
+    t = Table(title=f"{strategy} across {agg['stocks']} stocks · {cost_bps:.0f}bps/side")
+    t.add_column("")
+    t.add_column("median", justify="right")
+    t.add_row("strategy return", f"{agg['median_return_pct']:+.1f}%")
+    t.add_row("buy & hold return", f"{agg['median_benchmark_pct']:+.1f}%")
+    t.add_row("excess", f"{agg['median_excess_pct']:+.1f}%")
+    t.add_row("Sharpe", f"{agg['median_sharpe']:.2f}")
+    t.add_row("max drawdown", f"{agg['median_max_dd_pct']:.1f}%")
+    t.add_row("trades", str(agg["median_trades"]))
+    t.add_row("time in market", f"{agg['median_exposure_pct']:.0f}%")
+    print(t)
+
+    beat = agg["beat_benchmark_pct"]
+    colour = "green" if beat > 55 else "yellow" if beat > 45 else "red"
+    print(f"[{colour}]Beat buy-and-hold on {beat:.0f}% of stocks.[/{colour}]", end=" ")
+    print("[dim](~50% means the rule told you nothing.)[/dim]")
+    print(f"[yellow]⚠️  {SURVIVORSHIP_WARNING}[/yellow]")
+
+
+@backtest.command("strategies")
+def backtest_strategies():
+    """List the rules that can be tested."""
+    from .backtest.strategies import STRATEGIES
+
+    t = Table(title="Strategies", show_header=False)
+    for name, fn in STRATEGIES.items():
+        t.add_row(name, (fn.__doc__ or "").strip().split("\n")[0])
+    print(t)
 
 
 @app.command("quality")

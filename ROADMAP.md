@@ -89,12 +89,25 @@ Collected **verbatim, never interpreted**. No sentiment field exists, by design.
 
 ---
 
-## Next
+### Phase 6 — Backtest & eval ✅
+`backtest/` — every signal now has *measured* performance instead of a plausible story.
+Guards against the three things that fool a backtest: **lookahead** (positions are always
+shifted a bar — a signal from today's close is traded tomorrow), **costs** (25 bps a side),
+and **survivorship bias** (can't be fixed; every result carries the warning).
 
-### Phase 6 — Backtest & eval  ← *in progress*
-- **[CLAUDE]** A harness over historical data so any rule-based signal has *measured*
-  performance rather than a plausible story. Now meaningful, because prices are adjusted —
-  a backtest over unadjusted prices produces confidently wrong numbers.
+**The result is negative, and it matters: not one rule beat buy-and-hold.**
+The best (`rsi_reversion`) won on 33% of stocks; `macd_cross` on 14%. They're in the market
+~40% of the time, and the market rose 54% — being out of a rising market is the whole cost.
+They *do* cut drawdowns (−29% vs −41%), they just don't earn their keep doing it.
+**Full write-up: [`docs/backtest-results.md`](docs/backtest-results.md).**
+
+This validates the pack's design rather than undermining it: signals are presented as
+**observations, never recommendations**. Had the pack said "golden cross → BUY", it would
+have been confidently wrong on 85% of stocks.
+
+---
+
+## Next
 
 ### Phase 7 — Delivery
 - **[CLAUDE]** Scheduled pack generation (a dated folder of Markdown packs). Possibly a small
