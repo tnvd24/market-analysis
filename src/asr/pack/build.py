@@ -23,8 +23,10 @@ import pandas as pd
 
 from ..features.signals import Signal, detect, detect_52w
 from ..ingest.adjust import adjusted
+from ..news.materiality import TIER_NAMES, rank
 from ..quality.checks import QualityReport, run_checks
 from ..storage.base import StorageAdapter, get_storage
+from .context import describe, peer_context, universe_returns
 
 DISCLAIMER = (
     "Research only. These are computed observations, not investment advice, and not a "
@@ -86,23 +88,33 @@ def _indicator_block(feats: pd.Series) -> dict:
 
 
 def _news_block(storage: StorageAdapter, symbol: str, days: int, limit: int) -> list[dict]:
-    """Headlines and filings, quoted verbatim. Collected, deliberately not interpreted."""
+    """Filings and headlines, quoted verbatim, ordered by how price-relevant their *type* is.
+
+    Ranking is by category, never by content: a results announcement outranks a trading-window
+    notice whether the results are splendid or dreadful. Nothing is dropped — a statutory
+    filing is still a fact, it just shouldn't be the first thing a reader sees.
+    """
     since = (pd.Timestamp.now() - pd.Timedelta(days=days)).isoformat()
     df = storage.read_sql(
         "SELECT published_at, source, category, headline, summary, url FROM news "
         f"WHERE symbol = '{symbol}' AND published_at >= '{since}' "  # noqa: S608
-        f"ORDER BY published_at DESC LIMIT {int(limit)}"
+        "ORDER BY published_at DESC"
     )
+    if df.empty:
+        return []
+
+    ranked = rank(df).head(limit)
     return [
         {
             "published_at": str(pd.Timestamp(r.published_at)),
             "source": r.source,
             "category": r.category,
+            "materiality": TIER_NAMES[r.tier],
             "headline": r.headline,
             "summary": r.summary,
             "url": r.url,
         }
-        for r in df.itertuples()
+        for r in ranked.itertuples()
     ]
 
 
@@ -112,13 +124,15 @@ def build_pack(
     news_days: int = 30,
     news_limit: int = 25,
     quality: QualityReport | None = None,
+    universe: pd.DataFrame | None = None,
 ) -> dict:
     """The full research pack for one stock, as a plain dict (JSON-serialisable)."""
     storage = storage or get_storage()
     symbol = symbol.strip().upper()
 
     meta = storage.read_sql(
-        f"SELECT instrument_key, symbol, name, isin FROM instruments WHERE symbol = '{symbol}'"  # noqa: S608
+        "SELECT instrument_key, symbol, name, isin, industry FROM instruments "
+        f"WHERE symbol = '{symbol}'"  # noqa: S608
     )
     if meta.empty:
         raise LookupError(f"{symbol} is not in the stored universe. Run `asr ingest instruments`.")
@@ -159,11 +173,15 @@ def build_pack(
             "symbol": symbol,
             "name": meta.iloc[0]["name"],
             "isin": meta.iloc[0]["isin"],
+            "industry": meta.iloc[0]["industry"],
             "instrument_key": key,
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "disclaimer": DISCLAIMER,
         },
         "price": _price_block(candles),
+        # Is the stock falling, or is everything falling? Without this the reader supplies the
+        # comparison from imagination.
+        "context": peer_context(symbol, storage, universe),
         "indicators": _indicator_block(latest) if not feats.empty else {},
         "signals": [s.to_dict() for s in signals],
         "news": _news_block(storage, symbol, news_days, news_limit),
@@ -208,9 +226,19 @@ def to_markdown(pack: dict) -> str:
         f"({p['pct_below_52w_high']}% below the high, {p['pct_above_52w_low']}% above the low)",
         f"- History: {p['bars_available']} bars",
         "",
-        "## Indicators",
-        "",
     ]
+
+    context_lines = describe(pack.get("context", {}))
+    if context_lines:
+        lines += ["## Versus the index and its industry", ""]
+        lines += [f"- {line}" for line in context_lines]
+        lines += [
+            "",
+            "*Percentile = share of stocks this one outperformed. 50 is exactly typical.*",
+            "",
+        ]
+
+    lines += ["## Indicators", ""]
 
     if ind:
         for col, val in ind.items():
@@ -227,14 +255,30 @@ def to_markdown(pack: dict) -> str:
 
     lines += ["", "## News & filings (verbatim, uninterpreted)", ""]
     if pack["news"]:
-        for n in pack["news"]:
-            when = n["published_at"][:16]
-            cat = f" · {n['category']}" if n["category"] else ""
-            lines.append(f"- **{when}** [{n['source']}{cat}] {n['headline']}")
-            if n["summary"]:
-                lines.append(f"  - {n['summary']}")
-            if n["url"]:
-                lines.append(f"  - <{n['url']}>")
+        lines += [
+            "*Ordered by how price-relevant the filing **type** is — never by whether the news "
+            "is good or bad. That reading is yours.*",
+            "",
+        ]
+        headings = {
+            "high": "### Material — results, ratings, corporate actions, board changes",
+            "medium": "### Contextual — meetings, releases, updates",
+            "low": "### Statutory / procedural — filed because the rules require it",
+        }
+        for band in ("high", "medium", "low"):
+            items = [n for n in pack["news"] if n.get("materiality") == band]
+            if not items:
+                continue
+            lines += [headings[band], ""]
+            for n in items:
+                when = n["published_at"][:16]
+                cat = f" · {n['category']}" if n["category"] else ""
+                lines.append(f"- **{when}** [{n['source']}{cat}] {n['headline']}")
+                if n["summary"]:
+                    lines.append(f"  - {n['summary']}")
+                if n["url"]:
+                    lines.append(f"  - <{n['url']}>")
+            lines.append("")
     else:
         lines.append("- nothing in the window")
 
@@ -245,13 +289,18 @@ def to_markdown(pack: dict) -> str:
 def build_many(
     symbols: list[str], storage: StorageAdapter | None = None, **kw
 ) -> tuple[list[dict], dict[str, str]]:
-    """Packs for several stocks. Quality checks run once, not once per stock."""
+    """Packs for several stocks.
+
+    The quality checks and the universe-wide returns are computed **once** and shared. Both
+    scan every stock, so doing them per pack would turn a 500-stock run into a 500x500 one.
+    """
     storage = storage or get_storage()
     quality = run_checks(storage)
+    universe = universe_returns(storage)
     packs, failures = [], {}
     for sym in symbols:
         try:
-            packs.append(build_pack(sym, storage=storage, quality=quality, **kw))
+            packs.append(build_pack(sym, storage=storage, quality=quality, universe=universe, **kw))
         except LookupError as exc:
             failures[sym] = str(exc)
     return packs, failures

@@ -52,7 +52,7 @@ def test_load_universe_normalises_nse_column_names(tmp_path):
     )
     uni = load_universe(p)
 
-    assert list(uni.columns) == ["symbol", "isin", "name"]
+    assert list(uni.columns) == ["symbol", "isin", "name", "industry"]
     assert uni.iloc[0]["symbol"] == "RELIANCE"  # trimmed + upcased
     assert uni.iloc[0]["isin"] == "INE002A01018"
 

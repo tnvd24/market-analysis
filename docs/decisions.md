@@ -335,6 +335,43 @@ output trustworthy. Every pack carries the "not investment advice" disclaimer (P
 NULL indicators stay NULL through the whole chain — features → signals → pack. A missing RSI
 must never read as 0, which a signal layer would happily interpret as *maximally oversold*.
 
+### News is ranked by TYPE, never by content (`news/materiality.py`)
+The first real pack gave a Jio Platforms IPO filing and the dissolution of a ₹0.0009-crore
+shell subsidiary identical prominence, and buried both under statutory boilerplate. So filings
+are now tiered — **material / contextual / statutory** — and ordered accordingly.
+
+The discipline: this ranks **how price-relevant a filing's *type* is**, a property knowable in
+advance. It never asks "is this good or bad for the stock?" — that requires reading the
+document, and it is the reader's job. A results announcement outranks a trading-window notice
+*whether the results are splendid or dreadful*. There is a test asserting exactly that.
+
+Two bugs that only real data exposed, both worth keeping in mind for any keyword classifier:
+
+1. **The substance is in the summary, not the category.** NSE files the *type* in `desc` and
+   the *content* in the attachment text. The Jio IPO is categorised merely as "General
+   Updates" — the words "Initial Public Offer" appear only in the body. Ranking on the
+   category alone demoted the biggest item in the pack below a shell-company dissolution.
+2. **Statutory titles quote the regulation they are filed under, and those names are full of
+   material-sounding words.** Once summaries were read, "Disclosure under SEBI (Substantial
+   *Acquisition* of Shares and Takeovers) Regulations" matched *acquisition*, and an AGM's
+   "voting *results*" matched *results* — promoting pure boilerplate to the top. A statutory
+   exclusion list is now checked **first**, before any keyword.
+
+**Known limit, accepted:** a trivial restructuring still ranks as material, because *type* is
+all we judge on. The reader sees the filing's own text immediately below it ("0.0000001% of
+consolidated net worth"), which is the right place for that judgement to happen.
+
+### Peer & index context (`pack/context.py`)
+"RELIANCE is down 8.5% over a year" invites the wrong conclusion on its own; a reader will
+supply the missing comparison from imagination if we don't supply it from data. Every pack now
+carries the stock against **the index median** and **its own industry median** (NSE's sector
+from the Nifty 500 CSV), with percentiles.
+
+For RELIANCE it changes the reading materially: −8.5% over 1y against an index median of
+−3.5%, but its Oil & Gas peers are at −6.8% — so it is lagging the market while sitting mid-
+pack in its own sector. A percentile is a fact about a distribution, not a verdict. An industry
+with fewer than 3 stocks reports no median: one stock is not a distribution.
+
 ### The prompt is part of the system
 `prompts/analysis.md` is the other half of the handoff: it forbids the model from adding
 prices or events from memory, requires every claim to cite a value in the pack, tells it to

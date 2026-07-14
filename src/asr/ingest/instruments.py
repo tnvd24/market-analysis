@@ -27,7 +27,7 @@ MASTER_PATH = Path("data/NSE.json.gz")
 NIFTY500_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
 
 #: Columns every downstream consumer can rely on.
-INSTRUMENT_COLUMNS = ["instrument_key", "symbol", "isin", "name"]
+INSTRUMENT_COLUMNS = ["instrument_key", "symbol", "isin", "name", "industry"]
 
 
 def download_universe(dest: Path = UNIVERSE_CSV) -> Path:
@@ -64,7 +64,18 @@ def load_universe(path: Path = UNIVERSE_CSV, refresh: bool = False) -> pd.DataFr
         df[col] = df[col].astype(str).str.strip().str.upper()
     if "name" not in df.columns:
         df["name"] = df["symbol"]
-    return df[["symbol", "isin", "name"]].drop_duplicates(subset="isin").reset_index(drop=True)
+    # NSE's CSV carries the sector. It's what lets a research pack say whether a stock is
+    # falling on its own or falling with everything around it.
+    if "industry" not in df.columns:
+        df["industry"] = None
+    else:
+        df["industry"] = df["industry"].astype(str).str.strip()
+
+    return (
+        df[["symbol", "isin", "name", "industry"]]
+        .drop_duplicates(subset="isin")
+        .reset_index(drop=True)
+    )
 
 
 def load_master(path: Path = MASTER_PATH, refresh: bool = False) -> pd.DataFrame:
@@ -104,6 +115,8 @@ def resolve_universe(
     ]
 
     out = uni.copy()
+    if "industry" not in out.columns:  # a universe from an older CSV, or a hand-built one
+        out["industry"] = None
     out["instrument_key"] = out["isin"].map(by_isin)
     fallback = out["instrument_key"].isna()
     out.loc[fallback, "instrument_key"] = out.loc[fallback, "symbol"].map(by_symbol)

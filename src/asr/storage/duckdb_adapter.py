@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS instruments (
     instrument_key VARCHAR PRIMARY KEY,
     symbol         VARCHAR,
     isin           VARCHAR,
-    name           VARCHAR
+    name           VARCHAR,
+    industry       VARCHAR
 );
 """
 
@@ -66,7 +67,7 @@ CREATE TABLE IF NOT EXISTS news (
 """
 
 CANDLE_COLS = ["instrument_key", "symbol", "ts", "open", "high", "low", "close", "volume", "oi"]
-INSTRUMENT_COLS = ["instrument_key", "symbol", "isin", "name"]
+INSTRUMENT_COLS = ["instrument_key", "symbol", "isin", "name", "industry"]
 FEATURE_COLS = ["instrument_key", "symbol", "ts", *FEATURE_COLUMNS]
 ACTION_COLS = [
     "id",
@@ -101,10 +102,11 @@ class DuckDBAdapter(StorageAdapter):
         self._con.execute(FEATURES_DDL)
         self._con.execute(NEWS_DDL)
         self._con.execute(CORPORATE_ACTIONS_DDL)
-        # Databases created before adjustment existed predate this column.
+        # Databases created before these columns existed.
         self._con.execute(
             "ALTER TABLE candles ADD COLUMN IF NOT EXISTS adj_factor DOUBLE DEFAULT 1.0"
         )
+        self._con.execute("ALTER TABLE instruments ADD COLUMN IF NOT EXISTS industry VARCHAR")
 
     def write_df(self, table: str, df: pd.DataFrame, mode: str = "append") -> None:
         if mode == "replace":
