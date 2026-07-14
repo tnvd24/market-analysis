@@ -1,4 +1,14 @@
-"""Typer CLI. Commands fill in per phase."""
+"""The CLI. One command per stage of the deterministic pipeline.
+
+asr ingest instruments   # the Nifty 500 universe
+asr ingest prices        # NSE bhavcopy -> candles
+asr ingest actions       # splits/bonuses/dividends
+asr ingest adjust        # restate prices for splits/bonuses
+asr news fetch           # NSE filings (+ optional Upstox news)
+asr features build       # indicators, on adjusted prices
+asr quality              # make the silent failures loud
+asr pack build SYMBOL    # the research pack you paste into Claude
+"""
 
 from __future__ import annotations
 
@@ -11,10 +21,10 @@ from rich import print
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
-app = typer.Typer(help="Agentic stock research (research-only).")
-ingest = typer.Typer(help="Phase 2: data ingestion")
-features = typer.Typer(help="Phase 3: deterministic indicators")
-news = typer.Typer(help="Phase 4: news & filings")
+app = typer.Typer(help="Stock research for Indian markets (research-only, no orders).")
+ingest = typer.Typer(help="Data ingestion: prices, corporate actions, universe")
+features = typer.Typer(help="Deterministic indicators")
+news = typer.Typer(help="News & corporate filings")
 pack = typer.Typer(help="Research packs (the handoff to a human/chat read)")
 app.add_typer(ingest, name="ingest")
 app.add_typer(features, name="features")
@@ -207,7 +217,7 @@ def features_build(
         total = len(keys)
 
     if not total:
-        print("[yellow]No candles stored yet. Run `asr ingest backfill` first.[/yellow]")
+        print("[yellow]No candles stored yet. Run `asr ingest prices` first.[/yellow]")
         raise typer.Exit(1)
 
     with _progress() as bar:
@@ -338,7 +348,7 @@ def pack_build(
         df = storage.read_sql("SELECT DISTINCT symbol FROM candles ORDER BY symbol")
         symbols = df["symbol"].tolist()
         if not symbols:
-            print("[yellow]No candles stored. Run `asr ingest backfill` first.[/yellow]")
+            print("[yellow]No candles stored. Run `asr ingest prices` first.[/yellow]")
             raise typer.Exit(1)
 
     packs, failures = build_many(symbols, storage=storage, news_days=news_days)
@@ -368,9 +378,8 @@ def info():
         {
             "storage_backend": settings.storage_backend,
             "duckdb_path": settings.duckdb_path,
-            "model": settings.anthropic_model,
-            "upstox_token_set": bool(settings.upstox_access_token),
-            "anthropic_key_set": bool(settings.anthropic_api_key),
+            "price_source": "NSE bhavcopy (no auth)",
+            "upstox_news_token_set": bool(settings.upstox_access_token),  # optional extra
         }
     )
 

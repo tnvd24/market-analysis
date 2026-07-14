@@ -1,59 +1,79 @@
-# Agentic Stock Research — Indian Markets (research-only)
+# Stock Research — Indian Markets (research-only)
 
-A **grounded** agentic research system for NSE/BSE. Design rule:
-**deterministic data + math on the outside, Claude only for reasoning/synthesis inside.**
-The model never invents prices, indicators, or targets — it reasons over numbers a
-library computed and cites the rows behind every claim.
+A **grounded** research system for the Nifty 500. The design rule:
+**deterministic data and math on the outside; a human does the interpretation.**
+
+**No model touches the data**, so there is no hallucination surface at all. The system
+computes the facts — prices, indicators, rule-based signals, filings — and hands you a
+**research pack**. You read it, with Claude's help, on your subscription.
 
 > ⚠️ Research only. This system produces analysis you read, not orders it places.
 > That keeps it outside SEBI's algo-trading (Algo-ID) mandate, which binds automated
 > **order placement**, not research. Nothing here is investment advice.
 
-## Architecture (by phase)
-- **Phase 2 — Ingest (deterministic):** Upstox market data → `candles` table.
-- **Phase 3 — Features (deterministic):** RSI/MACD/MA/ATR/Bollinger via `pandas-ta` → `features`.
-- **Phase 4 — News (deterministic):** NSE filings + Upstox news → `news`, collected verbatim.
-- **Phase 4b — Quality + pack:** assertions that make silent corruption loud; a research pack.
-- **Phase 5 — Interactive read:** paste the pack into Claude with `prompts/analysis.md`.
-- **Phase 6 — Backtest/eval:** measured performance before anything is trusted.
+**No API keys. No accounts. ₹0 to run.** Prices, corporate actions and company filings all
+come from NSE, which serves them without authentication.
 
-**No model touches the data.** Everything above is pure code, so there is no hallucination
-surface at all; a human does the interpretation, over numbers a library computed.
+## How it works
+```
+NSE bhavcopy ─┐
+              ├─> candles ──(split-adjusted)──> indicators ──> signals ─┐
+corp actions ─┘                                                         ├─> research pack ─> you + Claude
+NSE filings ─────────────────────────────────> news (verbatim) ────────┘
+                                     ↑
+                             quality assertions
+                    (make the silent failures loud)
+```
 
-Storage is behind one interface: **DuckDB** locally (free), **BigQuery** in prod (flip
+**Splits are fixed, not just detected.** Raw traded prices are stored untouched; an
+adjustment factor computed from NSE's own corporate-action feed restates them. Without that,
+a 1:2 split looks exactly like a 50% overnight crash — and *nothing errors*.
+
+**In market data the dangerous failures don't throw.** A stale candle, a timezone shift, an
+unreadable split ratio, a symbol dropped from the universe: none raise an exception, they
+just produce a confident, wrong RSI. `asr quality` turns each into a loud error, and its
+findings ride *inside* every pack.
+
+Storage sits behind one interface: **DuckDB** locally (free), **BigQuery** in prod (flip
 `STORAGE_BACKEND`). Same calling code either way.
 
-**Phase 0 decisions** (data source = Upstox, universe = Nifty 500, storage = DuckDB-first)
-are logged with rationale in [`docs/decisions.md`](docs/decisions.md).
+📖 **[Setup guide — Linux, macOS, Windows](docs/setup.md)** ·
+🗺️ [Roadmap](ROADMAP.md) · 🧠 [Why it's built this way](docs/decisions.md)
 
 ## Layout
 ```
 src/asr/
-  config.py            # env-driven settings
-  storage/             # base + duckdb (dev) + bigquery (prod)
-  ingest/              # upstox_client.py, instruments.py (Nifty 500 → instrument keys)
-  features/            # Phase 3
-  news/                # Phase 4
-  agents/              # Phase 5
-  backtest/            # Phase 6
-  app/                 # Phase 7 — research brief / dashboard
-  cli.py               # `asr ingest smoke`, `asr info`
-infra/                 # Phases 8-9 — Cloud Run/GKE, Secret Manager, DAGs
+  config.py       # settings (nothing is required)
+  ingest/         # bhavcopy (prices), corporate_actions + adjust (splits), instruments
+  features/       # indicators (pandas-ta) + rule-based signals
+  news/           # NSE filings (primary) + optional Upstox wire
+  quality/        # the assertions that make silent corruption loud
+  pack/           # the research pack — computed facts, zero interpretation
+  storage/        # duckdb (dev) + bigquery (prod), one interface
+  backtest/       # Phase 6
+  cli.py
+prompts/          # analysis.md — the prompt you paste the pack into
+infra/            # Phases 8-9 — deploy manifests, DAGs
 ```
 
-## Quickstart (local, CachyOS + Docker/Rancher)
+## Quickstart
 ```bash
-cp .env.example .env          # then fill in tokens (see below)
-docker compose up -d --build
-docker compose exec asr asr info
-docker compose exec asr asr ingest smoke   # auth + storage check
+uv venv --python 3.12 && source .venv/bin/activate
+uv pip install -e ".[dev]"
+
+asr ingest instruments        # the Nifty 500 universe
+asr ingest prices --years 3   # NSE bhavcopy -> candles
+asr ingest actions --years 3  # splits, bonuses, dividends
+asr ingest adjust             # restate prices for splits
+asr features build            # indicators, on adjusted prices
+asr quality                   # verify before you trust
+asr pack build RELIANCE       # the thing you actually read
 ```
-Without Docker: `uv pip install -e ".[dev]"` then `asr info`.
+Then paste that pack into Claude with [`prompts/analysis.md`](prompts/analysis.md).
 
-Lean prod image (for Artifact Registry / Cloud Run later):
-`docker build --target runtime -t asr:prod .`
+Full instructions for all three platforms (and Docker): **[docs/setup.md](docs/setup.md)**.
 
-## Ingestion (Phase 2)
+## Ingestion
 ```bash
 asr ingest instruments         # Nifty 500 -> instrument keys
 asr ingest prices --years 3    # daily OHLCV from NSE bhavcopy
@@ -75,7 +95,7 @@ Every write is an upsert keyed by `(instrument_key, ts)`, so an interrupted back
 to re-run, and fetched days are cached on disk — a re-run costs no network at all. Candle
 timestamps are tz-naive **IST**.
 
-## Indicators (Phase 3)
+## Indicators
 ```bash
 asr features build            # candles -> RSI, MACD, MAs, ATR, Bollinger, volume
 asr features show RELIANCE    # spot-check one ticker
@@ -85,7 +105,7 @@ rolling window ever spans two stocks) and recomputed in full rather than appende
 EMA and RSI carry state from every prior bar. Warmup rows are **NULL, not 0** — "not enough
 history" must never read as "RSI 0".
 
-## News & filings (Phase 4 — fetch layer)
+## News & filings
 ```bash
 asr news fetch --days 30            # NSE filings + Upstox news -> news
 asr news fetch --source nse         # filings only (needs no token)
@@ -115,12 +135,23 @@ universe — none of these raise an exception, they just produce a confident, wr
 `asr quality` turns each of those into a loud error, and its findings ride *inside* every
 pack, so you can't read a stock's numbers without seeing that they may be suspect.
 
-## What YOU need to provide
-1. ~~**Upstox Analytics Token**~~ — **no longer needed.** Prices come from NSE bhavcopy,
-   which needs no auth. (An Upstox token is only useful if you want their *news* feed on
-   top of NSE's filings; the market-data client is retired.)
-2. ~~**Anthropic API key**~~ — **no longer needed.** The system is deterministic end to
-   end; the qualitative read happens by pasting a research pack into Claude on your
-   subscription. (A Pro/Max plan does *not* cover the Developer API anyway — that's
-   separate pay-as-you-go credit.) A key is only required if you later want a fully
-   unattended brief with nobody at the keyboard.
+## Credentials
+
+**None required.** No broker account, no API key, no billing. That is a deliberate design
+outcome, not a coincidence:
+
+- **Prices, corporate actions and filings** come from NSE, unauthenticated.
+- **No Anthropic key**, because no model is in the pipeline — you paste the pack into Claude
+  on your subscription. (A Pro/Max plan does not cover the Developer API in any case; that's
+  separate pay-as-you-go credit.)
+- **Optional:** an Upstox read-only token adds their news wire on top of NSE's filings. Put
+  it in `UPSTOX_ACCESS_TOKEN`. Nothing else changes if you don't.
+
+## Development
+```bash
+pytest -q          # ~110 tests, fully offline (no network, no fixtures to refresh)
+ruff check . && ruff format .
+```
+Tests never hit the network: HTTP is mocked at the transport layer, so the suite is fast and
+runs on a plane. Indicator tests assert against math derived *independently* of `pandas-ta` —
+comparing the library against itself would pass even if it were wired up wrong.

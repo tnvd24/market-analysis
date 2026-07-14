@@ -14,15 +14,15 @@ dependencies = [
   "typer>=0.12",
   "rich>=13.7",
   "python-dotenv>=1.0",
-  # --- Phase 3 (indicators) ---
+  # --- Indicators ---
   "pandas-ta>=0.3.14b0",   # current release needs numpy>=2.2 (pandas>=2.2 is compatible)
-  # --- Phase 4-5 (LLM / agents) ---
-  "langchain-anthropic>=0.3",
-  "langgraph>=0.2",
   # --- Prod storage (Phase 8-9); optional locally ---
   "google-cloud-bigquery>=3.25",
   "google-cloud-bigquery-storage>=2.27",
 ]
+# No LLM dependency, deliberately. The automated track is pure code (zero hallucination
+# surface); the qualitative read happens by pasting a research pack into Claude on a
+# subscription. See docs/decisions.md.
 
 [project.optional-dependencies]
 # We call the Upstox REST API directly with httpx (see ingest/upstox_client.py) rather

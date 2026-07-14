@@ -1,7 +1,23 @@
 # Decisions Log
 
-Records the choices that shape the code, so the plan doc (`tasks.txt`) and the
-implementation stay in agreement. Newest phase last.
+Why the code is the way it is — including the choices we **reversed**, and what it cost to
+learn better. For *what is built and what is next*, see [`../ROADMAP.md`](../ROADMAP.md).
+
+> **Reading order:** the two entries directly below are course corrections that supersede
+> earlier decisions further down the file. The superseded sections are kept, marked, and not
+> rewritten — a decision log that quietly erases its mistakes teaches nobody anything.
+
+## Where we landed (the short version)
+
+| | Choice | Because |
+|---|---|---|
+| **Prices** | **NSE bhavcopy** (no auth, ever) | It's the exchange's own file — the one brokers derive from. One request = the whole market for a day. |
+| **Splits** | **We adjust, from NSE's corporate-action feed** | A broker's adjustment is undocumented and unknowable. Ours is deterministic and auditable. |
+| **News** | **NSE filings** (primary) + optional Upstox wire | A company's filing outranks a journalist's headline. |
+| **The LLM** | **None in the pipeline** | The automated track is pure code → zero hallucination surface. A human reads the pack on a Claude subscription. |
+| **Universe** | Nifty 500 | Broad enough to be a real screen; bounded enough to be cheap. |
+| **Storage** | DuckDB → BigQuery, one interface | ₹0 until it works. Calling code never changes. |
+| **Orders** | **Never** | Keeps us outside SEBI's Algo-ID mandate, which binds order *placement*, not research. |
 
 ## Course correction — two tracks, no API key (supersedes parts of Phases 4-5)
 
@@ -62,7 +78,9 @@ project outside SEBI's Algo-ID mandate (which binds automated **order placement*
 research). A "not investment advice" disclaimer ships in every output. No broker
 order/trade endpoint is wired anywhere.
 
-### Data source — Upstox API
+### Data source — Upstox API  ⚠️ SUPERSEDED
+> **Superseded by "Price source: NSE bhavcopy" below.** The Upstox market-data client is
+> retired and there is no token in the system. Kept for the record; do not implement from it.
 - **Why:** Upstox exposes an OHLCV/historical-candle API and a 1-year, read-only
   **Analytics Token**, so we get market data without an order-capable session.
 - **Auth:** prefer the Analytics Token (`UPSTOX_ACCESS_TOKEN`) over the OAuth handshake —
@@ -113,7 +131,11 @@ See the repo layout in `README.md`. Notable choices made during scaffolding:
   ≥3.12); the earlier "pin numpy<2" note applied only to the old 2021 beta.
 - **Secrets** — local `.env` now; GCP Secret Manager hook noted in `config.py` for Phase 9.
 
-## Phase 2 — Ingestion
+## Phase 2 — Ingestion (Upstox era)  ⚠️ SUPERSEDED
+> **Superseded by "Price source: NSE bhavcopy" below.** The v3-candle client described here
+> no longer exists. Two things from it survived the move and still hold: **timestamps are
+> stored tz-naive IST**, and **idempotency (upsert on `(instrument_key, ts)`) is the
+> ingestion contract**. Everything else is history.
 
 ### Historical candles: the **v3** API, windowed
 `/v3/historical-candle/{key}/{unit}/{interval}/{to}/{from}` (v2 is being deprecated).
@@ -212,10 +234,27 @@ writing the *singular* **"To Re 1/-"** (not "Rs") — the single commonest split
 corrupted its entire price history with no error anywhere; instead the refusal-to-guess made
 it visible in minutes. That is the whole thesis of the quality layer, demonstrated on day one.
 
-**Live result:** 58,435 candles / 117 trading days, 1,977 corporate actions, **0 errors**.
-Four >20% overnight moves survive *after* adjustment and remain flagged as unexplained —
-possibly corporate actions NSE files under a name we don't parse (a demerger, say). Visible,
-not silently wrong.
+**Full 3-year backfill (verified):** 356,865 candles · 500/500 instruments ·
+2023-07-17 → 2026-07-14 · 7,174 corporate actions · **0 needing review** · 30,197 candles
+adjusted · **0 quality errors**.
+
+### The residual: 42 unexplained jumps, and what they turned out to be
+After adjustment, 42 overnight moves >20% remain flagged. Inspected, they fall into three
+groups — and the split is instructive:
+
+- **Real market history.** ADANIPORTS −21.1% on 2024-06-04 (election results day);
+  ADANIENT −22.6% on 2024-11-21 (the US indictment). The check cannot distinguish a genuine
+  crash from a data error, and *should not try* — that is why it is a WARN that says
+  "unexplained, verify", not an ERROR.
+- **Demergers — a genuine gap.** ABFRL −66.6% on 2025-05-22 is the Aditya Birla Lifestyle
+  demerger. NSE files these as a "Scheme of Arrangement", and adjusting for one requires the
+  value split between the parent and the demerged entity, which the feed does not give.
+  **We do not adjust for demergers, and the WARN is the safety net.** Fixing it properly
+  needs a value ratio from the scheme document; deferred rather than guessed at.
+- **Suspensions/relistings**, which show up alongside the 39 `candle_gap` warnings.
+
+This is the intended end state: everything the system cannot explain is *visible*, and
+nothing is silently assumed.
 
 ## Phase 4 — News sources (fetch layer)
 
