@@ -11,7 +11,7 @@ library computed and cites the rows behind every claim.
 
 ## Architecture (by phase)
 - **Phase 2 — Ingest (deterministic):** Upstox market data → `candles` table.
-- **Phase 3 — Features (deterministic):** RSI/MACD/MA/ATR via `pandas-ta` → `features`.
+- **Phase 3 — Features (deterministic):** RSI/MACD/MA/ATR/Bollinger via `pandas-ta` → `features`.
 - **Phase 4 — News (Claude, grounded):** articles → structured JSON (sentiment/catalysts).
 - **Phase 5 — Agents (Claude):** LangGraph supervisor; tools query the DB with typed inputs.
 - **Phase 6 — Backtest/eval:** measured performance before anything is trusted.
@@ -63,6 +63,16 @@ tz-naive **IST**.
 
 `asr ingest instruments` downloads both the NSE Nifty 500 constituents CSV and the Upstox
 instrument master by itself, and joins them on ISIN. Nothing to download by hand.
+
+## Indicators (Phase 3)
+```bash
+asr features build            # candles -> RSI, MACD, MAs, ATR, Bollinger, volume
+asr features show RELIANCE    # spot-check one ticker
+```
+Real math via `pandas-ta`, never LLM-guessed. Indicators are computed per instrument (no
+rolling window ever spans two stocks) and recomputed in full rather than appended, because
+EMA and RSI carry state from every prior bar. Warmup rows are **NULL, not 0** — "not enough
+history" must never read as "RSI 0".
 
 ## What YOU need to provide
 1. **Upstox Analytics Token** — Upstox → Developer Apps → generate the 1-year,

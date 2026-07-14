@@ -37,6 +37,11 @@ class BigQueryAdapter(StorageAdapter):
         self.write_df("candles", df, mode="append")
         return len(df)
 
+    def upsert_features(self, df: pd.DataFrame) -> int:
+        # TODO(phase8): MERGE via staging table, same as candles.
+        self.write_df("features", df, mode="append")
+        return len(df)
+
     def upsert_instruments(self, df: pd.DataFrame) -> int:
         # The universe is small and fully re-derived each sync, so truncate-and-load
         # is both idempotent and cheap here.

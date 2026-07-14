@@ -105,7 +105,7 @@ silently dropped — a short universe should be visible, not inferred later from
 instrument is recorded in the run's `failures` and the run continues, so one delisted
 symbol can't abort a 500-stock backfill.
 
-### Deferred, deliberately
+### Deferred, deliberately (Phase 2)
 - **Fundamentals and corporate actions** (both listed in the Phase 2 plan): Upstox exposes
   no endpoint for either. They need a separate source and are not blockers for Phases 3–6,
   so they are deferred rather than faked.
@@ -114,3 +114,37 @@ symbol can't abort a 500-stock backfill.
   (Phase 3) and backtests (Phase 6) will see false gaps. **To verify:** pull a stock with a
   known split and check for an unexplained price discontinuity on the ex-date. This must be
   settled before any backtest result is trusted.
+
+## Phase 3 — Indicators
+
+### Stable column names, not pandas-ta's
+pandas-ta names output after its parameters (`MACDh_12_26_9`, `BBL_20_2.0_2.0`). We rename
+to fixed names (`macd_hist`, `bb_lower`) in `features/indicators.py`. Retuning a parameter
+or upgrading pandas-ta must never rename a column that a Phase 5 agent tool queries — and
+the suffix format *did* already change between releases, so bands are selected by prefix.
+
+### Indicators are computed per instrument, never across
+Rolling and recursive windows are stateful along time. A window spanning two stocks is
+silent nonsense (B's SMA quietly averaging in A's prices), and it produces *plausible*
+numbers, which is the worst kind of wrong. `compute_features()` takes one instrument;
+`compute_all()` is the only thing that groups. There is a test for exactly this bug.
+
+### Full recompute, not incremental append
+EMA and RSI carry state from every prior bar, so appending only the new rows would yield
+values that quietly disagree with a full recompute. We recompute each instrument's whole
+series. On Nifty 500 × 3 years that is seconds of local CPU — much cheaper than debugging
+a subtly wrong EMA six weeks later.
+
+### Warmup rows are NULL, never 0
+The first `length-1` bars of any window have no defined value. Storing 0 there would let a
+Phase 5 agent read "RSI 0" (maximally oversold!) where the truth is "not enough history".
+Missing must read as missing all the way up to the agent layer, where the guardrail is to
+refuse rather than guess. `build_features()` also reports instruments with fewer than 200
+bars, whose slow moving averages are legitimately NULL.
+
+### Tests assert against independent math
+`tests/test_indicators.py` checks closed forms (SMA of 1..60), analytic edge cases (RSI is
+100 on an unbroken uptrend, 0 on a downtrend, 50 on symmetric moves; ATR of a constant true
+range equals that range) and definitional identities (MACD = EMA12 − EMA26; hist = MACD −
+signal). Comparing pandas-ta against itself would pass even if the library were wired up
+wrong — which is the one failure this layer exists to prevent.

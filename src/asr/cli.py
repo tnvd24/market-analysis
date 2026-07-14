@@ -12,7 +12,9 @@ from rich.table import Table
 
 app = typer.Typer(help="Agentic stock research (research-only).")
 ingest = typer.Typer(help="Phase 2: data ingestion")
+features = typer.Typer(help="Phase 3: deterministic indicators")
 app.add_typer(ingest, name="ingest")
+app.add_typer(features, name="features")
 
 
 def _progress() -> Progress:
@@ -39,6 +41,10 @@ def _select_keys(storage, symbols: list[str] | None, limit: int | None) -> list[
             print(f"[yellow]Not in the stored universe: {', '.join(sorted(missing))}[/yellow]")
     keys = df["instrument_key"].tolist()
     return keys[:limit] if limit else keys
+
+
+def _count(storage, sql: str) -> int:
+    return int(storage.read_sql(sql).iloc[0]["n"])
 
 
 def _report(report) -> None:
@@ -153,6 +159,52 @@ def ingest_smoke(instrument_key: str = "NSE_EQ|INE848E01016", days: int = 30):
             f"'{instrument_key}' ORDER BY ts DESC LIMIT 5"  # noqa: S608
         )
     )
+
+
+@features.command("build")
+def features_build(
+    limit: int | None = typer.Option(None, help="Only the first N instruments."),
+    symbol: list[str] = typer.Option(None, help="Restrict to these NSE symbols."),
+):
+    """Compute indicators over stored candles -> features."""
+    from .features.build import build_features
+    from .storage.base import get_storage
+
+    storage = get_storage()
+    keys = _select_keys(storage, symbol, limit) if (symbol or limit) else None
+    if keys is None:
+        total = _count(storage, "SELECT COUNT(DISTINCT instrument_key) AS n FROM candles")
+    else:
+        total = len(keys)
+
+    if not total:
+        print("[yellow]No candles stored yet. Run `asr ingest backfill` first.[/yellow]")
+        raise typer.Exit(1)
+
+    with _progress() as bar:
+        task = bar.add_task("features", total=total)
+        report = build_features(keys, storage=storage, on_progress=lambda *_: bar.advance(task))
+        bar.update(task, completed=total)
+
+    print(f"[green]{report.summary()}[/green]")
+    if report.thin:
+        print(f"[yellow]Thin history (slow MAs NULL): {', '.join(report.thin[:10])}[/yellow]")
+
+
+@features.command("show")
+def features_show(symbol: str, days: int = typer.Option(10, help="Rows to show.")):
+    """Spot-check one ticker's latest indicators against its candles."""
+    from .storage.base import get_storage
+
+    df = get_storage().read_sql(
+        "SELECT ts, rsi_14, macd, macd_signal, sma_20, sma_50, sma_200, atr_14, rel_volume "
+        f"FROM features WHERE symbol = '{symbol.strip().upper()}' "  # noqa: S608
+        f"ORDER BY ts DESC LIMIT {int(days)}"
+    )
+    if df.empty:
+        print(f"[yellow]No features for {symbol}. Run `asr features build`.[/yellow]")
+        raise typer.Exit(1)
+    print(df.to_string(index=False))
 
 
 @app.command("info")

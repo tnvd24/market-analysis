@@ -6,6 +6,7 @@ import duckdb
 import pandas as pd
 
 from ..config import settings
+from ..features.schema import FEATURE_COLUMNS
 from .base import StorageAdapter
 
 CANDLES_DDL = """
@@ -34,6 +35,18 @@ CREATE TABLE IF NOT EXISTS instruments (
 
 CANDLE_COLS = ["instrument_key", "symbol", "ts", "open", "high", "low", "close", "volume", "oi"]
 INSTRUMENT_COLS = ["instrument_key", "symbol", "isin", "name"]
+FEATURE_COLS = ["instrument_key", "symbol", "ts", *FEATURE_COLUMNS]
+
+# Derived from FEATURE_COLUMNS so the table can never drift from what the layer computes.
+FEATURES_DDL = f"""
+CREATE TABLE IF NOT EXISTS features (
+    instrument_key VARCHAR,
+    symbol         VARCHAR,
+    ts             TIMESTAMP,
+    {", ".join(f"{c} DOUBLE" for c in FEATURE_COLUMNS)},
+    PRIMARY KEY (instrument_key, ts)
+);
+"""
 
 
 class DuckDBAdapter(StorageAdapter):
@@ -43,6 +56,7 @@ class DuckDBAdapter(StorageAdapter):
         self._con = duckdb.connect(self.path)
         self._con.execute(CANDLES_DDL)
         self._con.execute(INSTRUMENTS_DDL)
+        self._con.execute(FEATURES_DDL)
 
     def write_df(self, table: str, df: pd.DataFrame, mode: str = "append") -> None:
         if mode == "replace":
@@ -73,6 +87,9 @@ class DuckDBAdapter(StorageAdapter):
 
     def upsert_instruments(self, df: pd.DataFrame) -> int:
         return self._upsert("instruments", df, INSTRUMENT_COLS, "_i")
+
+    def upsert_features(self, df: pd.DataFrame) -> int:
+        return self._upsert("features", df, FEATURE_COLS, "_f")
 
     def latest_candle_ts(self) -> dict[str, pd.Timestamp]:
         rows = self._con.execute(

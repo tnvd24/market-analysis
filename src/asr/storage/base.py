@@ -29,6 +29,11 @@ class StorageAdapter(ABC):
         """instrument_key -> newest stored candle ts. Drives incremental ingest."""
         ...
 
+    @abstractmethod
+    def upsert_features(self, df: pd.DataFrame) -> int:
+        """Idempotent write of indicators keyed by (instrument_key, ts)."""
+        ...
+
 
 def get_storage() -> StorageAdapter:
     from ..config import settings

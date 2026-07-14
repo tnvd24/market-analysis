@@ -51,8 +51,22 @@ Phase 2 — Data ingestion (deterministic)
 Phase 3 — Feature / indicator layer (deterministic)
 
 [CLAUDE] Compute RSI, MACD, moving averages, ATR, Bollinger, volume features with pandas-ta — real math, never LLM-guessed (this was the repo's core flaw).
+    -> DONE. src/asr/features/indicators.py: RSI-14, MACD(12/26/9), SMA-20/50/200, EMA-20,
+       ATR-14, Bollinger(20,2), OBV, 1d return, 20d volume average, relative volume.
+       Stable column names (macd_hist, bb_lower) so pandas-ta's parameter-derived names
+       never leak into agent tool queries. Grouped per instrument — no window spans two stocks.
 [CLAUDE] Unit tests asserting indicator correctness against known values.
+    -> DONE. tests/test_indicators.py asserts against math computed independently of
+       pandas-ta: closed forms (SMA of 1..60), analytic edge cases (RSI = 100 on an
+       unbroken uptrend, 0 on a downtrend, 50 on symmetric moves), definitional identities
+       (MACD = EMA12-EMA26; hist = MACD-signal), and a constant-true-range ATR.
 [BOTH] Run the feature job, spot-check a few tickers.
+    -> TODO (Prasad): after the backfill, `asr features build` then
+       `asr features show RELIANCE`. Needs the Upstox token first (Phase 2).
+
+Phase 3 notes: features are recomputed in full per instrument, not appended incrementally —
+EMA/RSI carry state from every prior bar, so a partial update would quietly disagree with a
+full recompute. Warmup rows are NULL, never 0.
 
 Phase 4 — News & sentiment (LLM, grounded)
 
