@@ -12,9 +12,13 @@ library computed and cites the rows behind every claim.
 ## Architecture (by phase)
 - **Phase 2 — Ingest (deterministic):** Upstox market data → `candles` table.
 - **Phase 3 — Features (deterministic):** RSI/MACD/MA/ATR/Bollinger via `pandas-ta` → `features`.
-- **Phase 4 — News (Claude, grounded):** articles → structured JSON (sentiment/catalysts).
-- **Phase 5 — Agents (Claude):** LangGraph supervisor; tools query the DB with typed inputs.
+- **Phase 4 — News (deterministic):** NSE filings + Upstox news → `news`, collected verbatim.
+- **Phase 4b — Quality + pack:** assertions that make silent corruption loud; a research pack.
+- **Phase 5 — Interactive read:** paste the pack into Claude with `prompts/analysis.md`.
 - **Phase 6 — Backtest/eval:** measured performance before anything is trusted.
+
+**No model touches the data.** Everything above is pure code, so there is no hallucination
+surface at all; a human does the interpretation, over numbers a library computed.
 
 Storage is behind one interface: **DuckDB** locally (free), **BigQuery** in prod (flip
 `STORAGE_BACKEND`). Same calling code either way.
@@ -85,13 +89,31 @@ own filing to the exchange) and the **Upstox News API** (secondary — reporting
 No open-web scraping. Rows are deduped on a content id, because news windows always overlap
 — you re-fetch "the last 30 days" every day.
 
-The Claude extractor (articles → structured sentiment/catalyst JSON) is the next step and
-needs an Anthropic API key.
+News is **collected, never interpreted** — the pack quotes it verbatim and a human reads it.
+
+## Research packs & data quality (the deliverable)
+```bash
+asr quality                      # data-quality assertions; exits non-zero on ERROR
+asr pack build RELIANCE          # print a research pack (Markdown)
+asr pack build --out packs/      # one pack per stock in the universe
+```
+A **research pack** is everything known about a stock — price summary, computed indicators,
+rule-based signals *with the numbers that triggered them*, and news quoted verbatim — and
+**nothing interpreted**. Paste it into Claude with [`prompts/analysis.md`](prompts/analysis.md)
+for the qualitative read. That runs on your subscription; no API key, no cost.
+
+**Why there's a quality layer:** in market data the dangerous failures don't throw. An
+unadjusted split, a stale holiday candle, a timezone shift, a symbol dropped from the
+universe — none of these raise an exception, they just produce a confident, wrong RSI.
+`asr quality` turns each of those into a loud error, and its findings ride *inside* every
+pack, so you can't read a stock's numbers without seeing that they may be suspect.
 
 ## What YOU need to provide
 1. **Upstox Analytics Token** — Upstox → Developer Apps → generate the 1-year,
    read-only **Analytics Token**. Paste into `UPSTOX_ACCESS_TOKEN` in `.env`.
    This is the only thing standing between you and real candles.
-2. **Anthropic API key** — paste into `ANTHROPIC_API_KEY` (needed from Phase 4).
-   Note: a Claude Pro/Max subscription does **not** cover the Developer API — it's
-   separate pay-as-you-go credit from console.anthropic.com.
+2. ~~**Anthropic API key**~~ — **no longer needed.** The system is deterministic end to
+   end; the qualitative read happens by pasting a research pack into Claude on your
+   subscription. (A Pro/Max plan does *not* cover the Developer API anyway — that's
+   separate pay-as-you-go credit.) A key is only required if you later want a fully
+   unattended brief with nobody at the keyboard.

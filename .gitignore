@@ -25,6 +25,9 @@ venv/
 data/
 *.db
 
+# Generated research packs (output, not source)
+packs/
+
 # Node (MCP pieces)
 node_modules/
 

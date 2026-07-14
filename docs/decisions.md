@@ -3,6 +3,49 @@
 Records the choices that shape the code, so the plan doc (`tasks.txt`) and the
 implementation stay in agreement. Newest phase last.
 
+## Course correction — two tracks, no API key (supersedes parts of Phases 4-5)
+
+The system splits into two tracks, and **the Anthropic API leaves the critical path.**
+
+**Automated track** (pure code, no LLM, no API key): ingest → indicators → rule-based
+signals → **research pack** (per stock: price summary, computed indicators, triggered
+signals with their evidence, news collected *but not interpreted*). Runs on demand or on a
+schedule. **Zero hallucination surface, because no model touches it.**
+
+**Interactive track** (a human, on the Claude subscription): paste the pack into a chat for
+the qualitative read — narrative, what-to-watch, risk framing — using `prompts/analysis.md`.
+Debugging happens in Claude Code. Both are interactive use, covered by the plan.
+
+Why: for a human-in-the-loop research tool where you are reviewing the output anyway,
+paste-into-Claude costs nothing beyond the subscription and removes an entire class of
+failure. The API key only comes back if we ever want a *truly unattended* brief — an email
+at 8am with nobody at the keyboard. (Note: a Pro/Max subscription does **not** cover the
+Developer API; that is separate pay-as-you-go credit. This decision sidesteps that spend.)
+
+**Roadmap changes:**
+- Phase 4: "LLM news extraction" → **news collection + research-pack exporter** (all code).
+- Phase 5: "automated agent synthesis" → **a reusable analysis prompt** you paste the pack into.
+- Phases 2, 3, 6 (ingest, indicators, backtest): unchanged — always deterministic.
+- Optional later: bolt automated API synthesis back on if hands-off is ever wanted.
+
+### The correction that matters more than the cost saving
+"Whenever there's an error we look into it" is **not sufficient in market data**, because
+the dangerous failures don't throw. A crash is easy: you see it, you fix it. What quietly
+wrecks a research system is plausible-but-wrong data that runs clean —
+
+- an unadjusted split halving a price overnight,
+- a stale candle from a holiday,
+- a timezone bug shifting every bar by a day,
+- a symbol silently dropping out of the universe.
+
+None of these raise an exception. They produce a confident, wrong RSI. So the automated
+track carries **data-quality assertions** (`src/asr/quality/checks.py`) that turn those
+states into loud errors. *That* is what makes "we look into errors" actually safe: you make
+the silent failures into errors there is something to look into.
+
+The findings ride **inside** the research pack, not merely in a log — so a reader cannot
+study a stock's numbers without also seeing that its prices may be unadjusted.
+
 ## Phase 0 — Scope & decisions
 
 | Decision | Choice | Status |
@@ -167,9 +210,38 @@ Verified live: re-running an identical fetch leaves 65 rows, not 130.
 
 ### Anthropic API billing is separate from the Claude subscription
 A Pro/Max plan covers claude.ai and Claude Code; the Developer API is pay-as-you-go credits
-on the same login. Phase 4's extractor is therefore genuinely new spend — which is why the
-fetch layer is deterministic and free, and only extraction costs tokens (with dedup, so we
-never re-pay for the same article).
+on the same login. **This is why the LLM extractor was dropped** in favour of the two-track
+design above: the news is collected and shipped verbatim in the pack, and a human does the
+interpretation on the subscription. No key, no spend.
+
+## Phase 4b/5 — Research pack, signals, and the quality layer
+
+### Signals are observations, not recommendations
+`features/signals.py` computes plain arithmetic rules (golden/death cross, RSI bands, MACD
+crossover, Bollinger breakout, volume spike, 200-DMA regime, 52-week proximity). Each signal
+carries **the numbers that triggered it**, so the pack says "golden_cross, because sma_50
+crossed from 1412.30 below sma_200 to 1419.80 above it" rather than a bare label to be taken
+on faith. `golden_cross` means two averages crossed; it does not mean buy. A crossover is an
+*event between two bars*, so it needs the previous row — a mere ordering is not a cross.
+
+`volume_spike` is deliberately **neutral**: unusual volume says something happened, not which
+way.
+
+### The pack reports; it does not conclude
+`pack/build.py` emits JSON or Markdown containing only computed facts, rule-based signals
+with evidence, and **news quoted verbatim** — there is deliberately no `sentiment` field and
+no interpretation anywhere. Every item keeps its source and URL so any claim is traceable.
+Drawing the conclusion is the reader's job, and keeping that boundary is what makes the
+output trustworthy. Every pack carries the "not investment advice" disclaimer (Phase 11).
+
+NULL indicators stay NULL through the whole chain — features → signals → pack. A missing RSI
+must never read as 0, which a signal layer would happily interpret as *maximally oversold*.
+
+### The prompt is part of the system
+`prompts/analysis.md` is the other half of the handoff: it forbids the model from adding
+prices or events from memory, requires every claim to cite a value in the pack, tells it to
+refuse rather than guess when data is missing, to read the data-quality section *first*, and
+to surface contradictions between signals rather than smoothing them into a tidy story.
 
 ## Phase 3 — Indicators
 

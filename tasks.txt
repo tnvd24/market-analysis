@@ -80,13 +80,28 @@ Phase 4 — News & sentiment (LLM, grounded)
     -> DONE. src/asr/news/{nse,upstox_news,fetch,schema}.py -> `news` table.
        Dedup on a content id (news windows always overlap). `asr news fetch` / `asr news show`.
 [CLAUDE] Claude-based extractor that turns articles into structured JSON (sentiment, catalyst type, entities) against a Pydantic schema, with dedup and timestamps.
-    -> BLOCKED on the Anthropic API key. NOTE: the Claude Pro/Max subscription does NOT
-       cover the Developer API — it is separate pay-as-you-go credit. Extraction is the
-       first real spend in this project; the fetch layer above costs nothing.
-    -> Known ceiling: Upstox returns headline+summary only (no article body — following the
-       link would be scraping). NSE's gist is sometimes boilerplate, with the substance in
-       the linked PDF. If extraction proves too thin, parse the NSE PDFs (the exchange's own
-       documents, so not scraping). See docs/decisions.md.
+    -> DROPPED. Superseded by the two-track design (see docs/decisions.md): news is collected
+       and shipped VERBATIM in the research pack, and a human does the interpretation in a
+       Claude chat on the subscription. No API key, no spend, no hallucination surface.
+       Reinstate only if a truly unattended (nobody-at-the-keyboard) brief is ever wanted.
+[CLAUDE] Research-pack exporter + data-quality assertion layer.
+    -> DONE. src/asr/quality/checks.py (turn silent corruption into loud errors),
+       src/asr/features/signals.py (rule-based, evidence-carrying), src/asr/pack/build.py
+       (JSON/Markdown pack), prompts/analysis.md (the paste-in prompt).
+       `asr quality` / `asr pack build SYMBOL`.
+
+Phase 5 — Interactive analysis (was: automated agent synthesis)
+
+[CLAUDE] A reusable analysis prompt/template you paste the research pack into.
+    -> DONE: prompts/analysis.md. Forbids adding facts from memory, requires citing the
+       pack's numbers, refuses rather than guesses, reads data-quality first, surfaces
+       contradictions between signals.
+[PRASAD] Run `asr pack build RELIANCE`, paste into Claude with the prompt, see if the read
+    is useful. That feedback shapes what the pack should carry next.
+
+Phase 5 (deferred) — Automated agent synthesis
+    -> The LangGraph supervisor / tool-calling agents below are OPTIONAL now, and only
+       needed for a hands-off brief. Deferred, not cancelled.
 
 Phase 5 — Agentic reasoning layer (Claude)
 

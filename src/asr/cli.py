@@ -14,9 +14,11 @@ app = typer.Typer(help="Agentic stock research (research-only).")
 ingest = typer.Typer(help="Phase 2: data ingestion")
 features = typer.Typer(help="Phase 3: deterministic indicators")
 news = typer.Typer(help="Phase 4: news & filings")
+pack = typer.Typer(help="Research packs (the handoff to a human/chat read)")
 app.add_typer(ingest, name="ingest")
 app.add_typer(features, name="features")
 app.add_typer(news, name="news")
+app.add_typer(pack, name="pack")
 
 
 def _progress() -> Progress:
@@ -264,6 +266,72 @@ def news_show(symbol: str, limit: int = typer.Option(10, help="Rows to show.")):
         print(f"[yellow]No news for {symbol}. Run `asr news fetch`.[/yellow]")
         raise typer.Exit(1)
     print(df.to_string(index=False))
+
+
+@app.command("quality")
+def quality_check(
+    strict: bool = typer.Option(
+        True, help="Exit non-zero on ERROR findings (the point of the check)."
+    ),
+):
+    """Data-quality assertions: make the silent failures loud."""
+    from .quality.checks import ERROR, WARN, run_checks
+    from .storage.base import get_storage
+
+    report = run_checks(get_storage())
+    colour = {ERROR: "red", WARN: "yellow"}
+    for f in report.findings:
+        print(f"[{colour.get(f.severity, 'dim')}]{f}[/{colour.get(f.severity, 'dim')}]")
+
+    if report.ok:
+        print(f"[green]{report.summary()}[/green]")
+    else:
+        print(f"[red]{report.summary()}[/red]")
+        if strict:
+            raise typer.Exit(1)
+
+
+@pack.command("build")
+def pack_build(
+    symbol: list[str] = typer.Argument(None, help="Tickers. Omit for the whole universe."),
+    fmt: str = typer.Option("md", "--format", help="md | json"),
+    out: str | None = typer.Option(None, help="Directory to write to. Omit to print."),
+    news_days: int = typer.Option(30, help="News lookback window."),
+):
+    """Export a research pack: computed facts only, ready to paste into Claude."""
+    from pathlib import Path
+
+    from .pack.build import build_many, default_out_dir, to_json, to_markdown
+    from .storage.base import get_storage
+
+    if fmt not in ("md", "json"):
+        raise typer.BadParameter("format must be md or json")
+
+    storage = get_storage()
+    symbols = [s.strip().upper() for s in symbol] if symbol else None
+    if symbols is None:
+        df = storage.read_sql("SELECT DISTINCT symbol FROM candles ORDER BY symbol")
+        symbols = df["symbol"].tolist()
+        if not symbols:
+            print("[yellow]No candles stored. Run `asr ingest backfill` first.[/yellow]")
+            raise typer.Exit(1)
+
+    packs, failures = build_many(symbols, storage=storage, news_days=news_days)
+    render = to_markdown if fmt == "md" else to_json
+
+    if out is None and len(packs) == 1:
+        print(render(packs[0]))
+    elif packs:
+        directory = Path(out or default_out_dir())
+        directory.mkdir(parents=True, exist_ok=True)
+        for p in packs:
+            path = directory / f"{p['meta']['symbol']}.{fmt}"
+            path.write_text(render(p))
+        print(f"[green]Wrote {len(packs)} packs to {directory}/[/green]")
+        print("[dim]Paste one into Claude with prompts/analysis.md[/dim]")
+
+    for sym, err in list(failures.items())[:10]:
+        print(f"[red]  {sym}: {err}[/red]")
 
 
 @app.command("info")
